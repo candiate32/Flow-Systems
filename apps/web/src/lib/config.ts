@@ -18,15 +18,6 @@ export function turnstileSiteKey(): string {
   return read('VITE_TURNSTILE_SITE_KEY')
 }
 
-export function demoSourceKey(): string {
-  return read('VITE_DEMO_SOURCE_KEY') || 'demo-web-form'
-}
-
-export function whatsappFallbackUrl(): string {
-  const digits = (read('VITE_WHATSAPP_FALLBACK_PHONE') || '919000000001').replace(/\D/g, '')
-  return `https://wa.me/${digits}`
-}
-
 // Static hosts without SPA rewrites (GitHub Pages previews) use hash routes: /#/admin.
 export function hashRouting(): boolean {
   return read('VITE_HASH_ROUTER') === 'true'

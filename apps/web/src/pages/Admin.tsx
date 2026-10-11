@@ -2,7 +2,7 @@ import { adminUrl } from '../lib/config'
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { getSupabase } from '../lib/supabase'
-import { formatIst, replySeconds } from '../lib/format'
+import { detailEntries, formatIst, replySeconds } from '../lib/format'
 import type { Lead } from '../lib/types'
 
 const inputClass =
@@ -70,6 +70,21 @@ function SignIn() {
   )
 }
 
+function LeadDetails({ details }: { details: Lead['details'] }) {
+  const entries = detailEntries(details)
+  if (entries.length === 0) return null
+  return (
+    <dl aria-label="Details" className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-xs text-stone-600">
+      {entries.map(([label, value]) => (
+        <div key={label} className="contents">
+          <dt className="text-stone-500">{label}</dt>
+          <dd className="break-words text-stone-800">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
 function LeadsTable() {
   const supabase = getSupabase()!
   const [leads, setLeads] = useState<Lead[] | null>(null)
@@ -79,7 +94,7 @@ function LeadsTable() {
     let cancelled = false
     supabase
       .from('leads')
-      .select('id, name, phone_e164, bhk, created_at, first_auto_reply_at')
+      .select('id, name, phone_e164, bhk, created_at, first_auto_reply_at, details')
       .order('created_at', { ascending: false })
       .limit(500)
       .then(({ data, error }) => {
@@ -116,6 +131,7 @@ function LeadsTable() {
                 <div className="text-xs text-stone-500 sm:hidden">
                   {lead.bhk ?? '—'} · {formatIst(lead.created_at)}
                 </div>
+                <LeadDetails details={lead.details} />
               </td>
               <td className="whitespace-nowrap px-3 py-2">{lead.phone_e164}</td>
               <td className="hidden px-3 py-2 sm:table-cell">{lead.bhk ?? '—'}</td>
