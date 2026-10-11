@@ -49,7 +49,7 @@ export function FormTabs() {
   const panelId = `${uid}-panel`
   return (
     <div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         <div
           role="tablist"
           aria-label="Sample studio forms"
@@ -73,21 +73,21 @@ export function FormTabs() {
                 onClick={() => select(i, false)}
                 onKeyDown={(e) => onTabKeyDown(e, i)}
                 className={[
-                  'inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-3 text-sm font-semibold whitespace-nowrap transition-colors sm:flex-none sm:px-4',
+                  'inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-2 text-sm font-semibold whitespace-nowrap transition-colors sm:flex-none sm:px-4',
                   selected
                     ? 'bg-[var(--ff-accent)] text-[var(--ff-accent-text)]'
                     : 'text-[var(--ff-muted)] hover:bg-[var(--ff-bg)] hover:text-[var(--ff-text)]',
                   focusRing,
                 ].join(' ')}
               >
-                <Swatch config={c} className={selected ? 'ring-2 ring-[var(--ff-accent-text)]/70' : ''} />
+                <Swatch config={c} className={`hidden sm:block ${selected ? 'ring-2 ring-[var(--ff-accent-text)]/70' : ''}`} />
                 <span className="truncate sm:hidden">{c.studio.name.split(' ')[0]}</span>
                 <span className="hidden sm:inline">{c.studio.name}</span>
               </button>
             )
           })}
         </div>
-        <div className="ml-auto hidden items-center gap-2 sm:flex">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
           <button type="button" onClick={() => select(index - 1, false)} aria-label={`Previous form: ${prev.studio.name}`} className={roundButton}>
             <Arrow direction="prev" />
           </button>

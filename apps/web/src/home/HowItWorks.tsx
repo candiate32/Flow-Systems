@@ -67,14 +67,14 @@ export function HowItWorks() {
                   aria-hidden="true"
                   className="absolute top-11 -bottom-9 left-[1.0625rem] w-0.5 overflow-hidden rounded-full bg-[var(--ff-border)] sm:-bottom-11"
                 >
-                  <span className="block h-full origin-top scale-y-0 bg-[var(--ff-accent)] transition-transform duration-500 ease-out group-data-reached:scale-y-100" />
+                  <span className="block h-full origin-top scale-y-0 bg-[var(--ff-accent)] transition-transform duration-500 ease-out group-data-reached:scale-y-100 motion-reduce:transition-none" />
                 </span>
               )}
               <span
                 aria-hidden="true"
                 className={[
                   'absolute top-0 left-0 flex size-9 items-center justify-center rounded-full border-2 text-sm font-bold tabular-nums',
-                  'border-[var(--ff-border)] bg-[var(--ff-bg)] text-[var(--ff-muted)] transition-colors duration-300',
+                  'border-[var(--ff-border)] bg-[var(--ff-bg)] text-[var(--ff-muted)] transition-colors duration-300 motion-reduce:transition-none',
                   'group-data-reached:border-[var(--ff-accent)] group-data-reached:bg-[var(--ff-accent)] group-data-reached:text-[var(--ff-accent-text)]',
                 ].join(' ')}
               >
@@ -108,7 +108,7 @@ export function HowItWorks() {
           {ADD_ONS.map((item, i) => (
             <li key={item.title}>
               <Reveal delay={i * 80} className="h-full">
-                <div className="h-full rounded-[calc(var(--ff-radius)*1.5)] border border-[var(--ff-border)] bg-[var(--ff-surface)] p-6 transition-[translate,box-shadow] duration-300 hover:-translate-y-1 hover:shadow-[0_24px_40px_-28px_rgb(28_40_38/0.35)]">
+                <div className="h-full rounded-[calc(var(--ff-radius)*1.5)] border border-[var(--ff-border)] bg-[var(--ff-surface)] p-6 transition-[translate,box-shadow] duration-300 hover:shadow-[0_24px_40px_-28px_rgb(28_40_38/0.35)] motion-safe:hover:-translate-y-1">
                   <h4 className="font-semibold">{item.title}</h4>
                   <p className="mt-2 text-[0.9375rem] leading-relaxed text-[var(--ff-muted)]">{item.body}</p>
                 </div>

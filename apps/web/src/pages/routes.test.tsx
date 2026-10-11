@@ -123,9 +123,11 @@ describe('/ showcase', () => {
     expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Asha')
   })
 
-  it('links the wordmark to the home page', () => {
+  it('links the wordmark to the home page, on phones and desktops', () => {
     renderAt('/')
-    expect(screen.getByRole('link', { name: 'Flow Systems: what we do' }).getAttribute('href')).toBe('/home')
+    const links = screen.getAllByRole('link', { name: 'Flow Systems: what we do' })
+    expect(links).toHaveLength(2)
+    for (const link of links) expect(link.getAttribute('href')).toBe('/home')
   })
 
   it('submits for real, with the source key and custom answers', async () => {

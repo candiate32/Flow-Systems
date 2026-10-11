@@ -68,6 +68,11 @@ export default function Showcase() {
     document.title = `${config.studio.name} · Sample forms by Flow Systems`
   }, [config])
 
+  // Arriving from another page, such as the bottom of /home, starts at the top.
+  useEffect(() => {
+    if (window.scrollY > 0) window.scrollTo({ top: 0 })
+  }, [])
+
   // A switch made while scrolled down starts the new form from its top.
   const shownSlug = useRef(active)
   useEffect(() => {
@@ -108,7 +113,15 @@ export default function Showcase() {
               <span className="block text-xs text-stone-400">Sample enquiry forms, live on our lead engine</span>
             </Link>
             <p className="text-[0.6875rem] leading-none font-semibold tracking-[0.16em] text-stone-400 uppercase lg:hidden">
-              Flow Systems · Sample forms
+              {/* The pseudo-element stretches the tap area to 44px without moving the layout. */}
+              <Link
+                to="/home"
+                aria-label="Flow Systems: what we do"
+                className={`relative rounded-sm text-stone-200 underline decoration-white/30 underline-offset-[3px] before:absolute before:-inset-x-2 before:-inset-y-4 before:content-[''] ${barFocus}`}
+              >
+                Flow Systems
+              </Link>{' '}
+              · Sample forms
             </p>
             <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm font-semibold lg:hidden">
               <Swatch config={config} className="ring-1 ring-white/30" />

@@ -183,7 +183,7 @@ function Why() {
         <Reveal>
           <p className={eyebrow}>Why it matters</p>
           <h2 id="why-title" className={`${displayClass} mt-4 max-w-4xl text-[1.75rem] leading-[1.15] text-balance sm:text-[2.75rem]`}>
-            Homeowners message three or four studios at once. The one that replies first, and keeps following up, often
+            Homeowners message several studios at once. The one that replies first, and keeps following up, often
             gets the site visit.
           </h2>
         </Reveal>

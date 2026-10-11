@@ -1,11 +1,14 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { displayClass } from '../forms/components/ui'
 
-/** Plays in once, `delay` ms after load. Shown as is with reduced motion. */
+// Every beat is paused until the exchange is on screen (see HeroExchange).
+const playState = '[animation-play-state:var(--hero-play,running)]'
+
+/** Plays in once, `delay` ms after the exchange comes into view. Shown as is with reduced motion. */
 function Beat({ delay, className = '', children }: { delay: number; className?: string; children: ReactNode }) {
   const style: CSSProperties = { animationDelay: `${delay}ms` }
   return (
-    <div style={style} className={`motion-safe:animate-[hero-in_640ms_cubic-bezier(0.22,1,0.36,1)_both] ${className}`}>
+    <div style={style} className={`motion-safe:animate-[hero-in_640ms_cubic-bezier(0.22,1,0.36,1)_both] ${playState} ${className}`}>
       {children}
     </div>
   )
@@ -35,7 +38,7 @@ function Typing({ delay }: { delay: number }) {
     <div
       aria-hidden="true"
       style={{ animationDelay: `${delay}ms` }}
-      className="absolute top-0 left-0 flex gap-1 rounded-2xl rounded-tl-md bg-[var(--ff-surface)] px-3.5 py-3.5 opacity-0 motion-safe:animate-[typing-window_1100ms_ease-in-out_both] motion-reduce:hidden"
+      className={`absolute top-0 left-0 flex gap-1 rounded-2xl rounded-tl-md bg-[var(--ff-surface)] px-3.5 py-3.5 opacity-0 motion-safe:animate-[typing-window_1100ms_ease-in-out_both] motion-reduce:hidden ${playState}`}
     >
       {[0, 160, 320].map((d) => (
         <span
@@ -49,13 +52,38 @@ function Typing({ delay }: { delay: number }) {
 }
 
 /**
+ * Starts the exchange once a third of it is on screen: right away on desktop,
+ * and on a phone when you scroll to it, so the reply is seen arriving.
+ */
+function usePlayWhenSeen() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [play, setPlay] = useState(() => typeof IntersectionObserver === 'undefined')
+  useEffect(() => {
+    const el = ref.current
+    if (play || !el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return
+        setPlay(true)
+        observer.disconnect()
+      },
+      { threshold: 0.35 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [play])
+  return { ref, style: { '--hero-play': play ? 'running' : 'paused' } as CSSProperties }
+}
+
+/**
  * The hero's picture of the product: a website enquiry, the studio's WhatsApp
  * reply 38 seconds later, the homeowner answering, and the lead alert. An
  * illustration with made-up names, not real data.
  */
 export function HeroExchange() {
+  const { ref, style } = usePlayWhenSeen()
   return (
-    <div className="relative mx-auto w-full max-w-[24rem] pb-8 lg:mx-0 lg:ml-auto">
+    <div ref={ref} style={style} className="relative mx-auto w-full max-w-[24rem] pb-8 lg:mx-0 lg:ml-auto">
       {/* The terrazzo slab the phone rests on. */}
       <div
         aria-hidden="true"
