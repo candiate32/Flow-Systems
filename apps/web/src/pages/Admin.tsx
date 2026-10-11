@@ -23,7 +23,7 @@ function SignIn() {
     setError(null)
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/admin` },
     })
     setBusy(false)
     if (error) setError(error.message)

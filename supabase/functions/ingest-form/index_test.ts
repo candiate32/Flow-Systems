@@ -78,6 +78,13 @@ Deno.test("verifyTurnstile passes when TURNSTILE_SECRET is unset", async () => {
   assertEquals(await verify(null), true);
 });
 
+Deno.test("verifyTurnstile fails closed without a secret when a real provider is configured", async () => {
+  const verify = makeVerifyTurnstile((k) => (k === "WHATSAPP_PROVIDER" ? "some-bsp" : undefined), () => {
+    throw new Error("must not call Cloudflare");
+  });
+  assertEquals(await verify("token"), false);
+});
+
 Deno.test("verifyTurnstile fails a missing token when the secret is set", async () => {
   const verify = makeVerifyTurnstile((k) => (k === "TURNSTILE_SECRET" ? "s3cret" : undefined), () => {
     throw new Error("must not call Cloudflare without a token");

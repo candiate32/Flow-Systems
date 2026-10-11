@@ -99,7 +99,7 @@ describe('admin page', () => {
     )
     expect(mocks.client.auth.signInWithOtp).toHaveBeenCalledWith({
       email: 'owner@example.com',
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/admin` },
     })
     expect(mocks.client.from).not.toHaveBeenCalled()
   })

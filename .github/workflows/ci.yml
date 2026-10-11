@@ -37,7 +37,7 @@ jobs:
       - run: deno test -A supabase/functions
 
   database:
-    name: Database (supabase test db)
+    name: Database and end to end (supabase test db, ingest-form)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,9 +45,26 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - run: npm ci
-      - run: npx supabase db start
+      - run: npx supabase start -x studio,imgproxy,logflare,vector
       - run: npx supabase test db
+      - name: Edge Function tests against the local database
+        run: |
+          eval "$(npx supabase status -o env | grep -E '^SERVICE_ROLE_KEY=')"
+          SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" deno test -A supabase/functions
+      - name: End to end through supabase functions serve
+        run: |
+          npx supabase functions serve > functions.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null -X OPTIONS http://127.0.0.1:54321/functions/v1/ingest-form && break
+            sleep 2
+          done
+          scripts/e2e-ingest.sh
+      - if: failure()
+        run: cat functions.log || true
 
   secrets:
     name: No server secrets in the repo

@@ -362,7 +362,11 @@ export function makeVerifyTurnstile(
 ): Deps["verifyTurnstile"] {
   return async (token) => {
     const secret = env("TURNSTILE_SECRET");
-    if (!secret) return true;
+    if (!secret) {
+      // Only the fake provider may run without spam protection; a real one would send WhatsApp to anyone.
+      const provider = env("WHATSAPP_PROVIDER") ?? "";
+      return provider === "" || provider === "fake";
+    }
     if (!token) return false;
     try {
       const res = await fetchFn("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
