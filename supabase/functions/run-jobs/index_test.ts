@@ -95,7 +95,7 @@ Deno.test("run-jobs: 200 and a summary with the right secret", async () => {
     env: envOf({ RUN_JOBS_SECRET: "s3cret" }),
   });
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, errors: 0 });
+  assertEquals(await res.json(), { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
 });
 
 Deno.test("secretMatches needs both values and an exact match", () => {
@@ -150,7 +150,7 @@ dbTest("send_message: sends once, records the message with its job, sets first_a
     const clock = { t: T0 };
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs(runnerDeps(provider, clock));
-    assertEquals(summary, { claimed: 1, done: 1, cancelled: 0, retried: 0, dead: 0, errors: 0 });
+    assertEquals(summary, { claimed: 1, done: 1, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
 
     assertEquals(provider.sent.length, 1);
     assertEquals(provider.sent[0].to, phone.e164);
@@ -274,7 +274,7 @@ dbTest("a running job whose lease expired is claimed again; past max_attempts it
     assertEquals((await runClaimedJobs(runnerDeps(provider, { t: new Date(T0.getTime() + 10 * MIN) }))).claimed, 0);
     // 15 minutes later both leases have expired.
     const summary = await runClaimedJobs(runnerDeps(provider, { t: new Date(T0.getTime() + 15 * MIN) }));
-    assertEquals(summary, { claimed: 2, done: 1, cancelled: 0, retried: 0, dead: 1, errors: 0 });
+    assertEquals(summary, { claimed: 2, done: 1, cancelled: 0, retried: 0, dead: 1, lost: 0, errors: 0 });
     assertEquals(provider.sent.length, 1, "only the job with attempts left is run");
     assertEquals((await jobRow(retryable)).attempts, 2);
     const dead = await jobRow(exhausted);
@@ -332,6 +332,157 @@ dbTest("a send_message job for a phone other than the lead's is dead-lettered, n
     assertEquals(provider.sent[0].to, "+919000000002");
     assertEquals(provider.sent[0].params.slice(0, 3), ["send_message", jobId, "1"]);
     assertEquals((await eventsForJob(jobId)).map((e) => e.type), ["job_dead", "ops_alert_sent"]);
+  } finally {
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+// --- Owner alerts (spec 004, A.5) ------------------------------------------
+
+async function enqueueOwnerAlert(leadId: string, to: string) {
+  const id = await enqueueJob(db, {
+    org_id: DEMO_ORG,
+    lead_id: leadId,
+    kind: "send_message",
+    run_at: T0.toISOString(),
+    idempotency_key: `test:${crypto.randomUUID()}`,
+    payload: {
+      to,
+      template: "owner_alert",
+      language: "en",
+      params: ["Job Test", "+917000000000", "-", "-"],
+      first_auto_reply: false,
+    },
+  });
+  assertExists(id);
+  return id!;
+}
+
+dbTest("send_message owner_alert: goes to the org's owner phone, recorded without a lead_id", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  let jobId = "";
+  try {
+    jobId = await enqueueOwnerAlert(leadId, "+919000000001");
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
+    assertEquals(summary.done, 1);
+    assertEquals(provider.sent.map((s) => [s.to, s.template]), [["+919000000001", "owner_alert"]]);
+    const { data: msgs } = await db.from("messages").select("*").eq("job_id", jobId);
+    assertEquals(msgs!.length, 1);
+    assertEquals(msgs![0].lead_id, null);
+    assertEquals(msgs![0].to_phone, "+919000000001");
+    assertEquals(msgs![0].template_name, "owner_alert");
+    const { data: lead } = await db.from("leads").select("first_auto_reply_at").eq("id", leadId).single();
+    assertEquals(lead!.first_auto_reply_at, null, "an owner alert is not the lead's auto-reply");
+    assertEquals((await eventsForJob(jobId)).map((e) => e.type), ["owner_alert_sent"]);
+  } finally {
+    await cleanup({ jobIds: [jobId], leadIds: [leadId] });
+  }
+});
+
+dbTest("send_message owner_alert: a phone that is not an owner phone of the org is cancelled, not sent", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  try {
+    const jobId = await enqueueOwnerAlert(leadId, uniquePhone().e164);
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
+    assertEquals(summary.cancelled, 1);
+    assertEquals(provider.sent.length, 0);
+    assertEquals((await jobRow(jobId)).status, "cancelled");
+    assertEquals((await eventsForJob(jobId)).map((e) => e.type), ["job_cancelled"]);
+  } finally {
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+// --- Exactly once after status changes, and lost leases ----------------------
+
+dbTest("a reclaimed job whose message is already delivered sends nothing", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  try {
+    const jobId = await enqueueAck(leadId, phone.e164);
+    // Its runner sent the message and died before settling; a receipt has since
+    // moved the message to delivered.
+    await db.from("jobs").update({ status: "running", attempts: 1, updated_at: T0.toISOString() }).eq("id", jobId);
+    await db.from("messages").insert({
+      org_id: DEMO_ORG,
+      lead_id: leadId,
+      job_id: jobId,
+      to_phone: phone.e164,
+      direction: "outbound",
+      kind: "template",
+      template_name: "enquiry_ack",
+      provider: "fake",
+      provider_message_id: `fake-${crypto.randomUUID()}`,
+      status: "delivered",
+      sent_at: T0.toISOString(),
+    });
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs(runnerDeps(provider, { t: new Date(T0.getTime() + 15 * MIN) }));
+    assertEquals(summary.claimed, 1, "the expired lease is reclaimed");
+    assertEquals(summary.done, 1);
+    assertEquals(provider.sent.length, 0, "nothing sent twice");
+    const job = await jobRow(jobId);
+    assertEquals(job.status, "done");
+    assertEquals(job.attempts, 2);
+    const { count } = await db.from("messages").select("id", { count: "exact", head: true }).eq("job_id", jobId);
+    assertEquals(count, 1);
+  } finally {
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+/** A handler that, mid-run, loses its job to another runner (as a lease reclaim would), then fails. */
+function losesLeaseThenThrows(): Deps["handlers"] {
+  return {
+    send_message: async (job) => {
+      await db.from("jobs").update({ attempts: job.attempts + 1, updated_at: T0.toISOString() }).eq("id", job.id);
+      throw new Error("boom after losing the lease");
+    },
+  };
+}
+
+dbTest("lost lease on a retry: no retry event, and the other runner's state is kept", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  try {
+    const jobId = await enqueueAck(leadId, phone.e164);
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs({ ...runnerDeps(provider, { t: T0 }), handlers: losesLeaseThenThrows() });
+    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
+    const job = await jobRow(jobId);
+    assertEquals(job.status, "running", "still the other runner's");
+    assertEquals(job.attempts, 2);
+    assertEquals(job.last_error, null);
+    assertEquals((await eventsForJob(jobId)).map((e) => e.type), []);
+  } finally {
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+dbTest("lost lease on the final attempt: no job_dead event and no ops alert", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  try {
+    const jobId = await enqueueAck(leadId, phone.e164, { max_attempts: 1 });
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs({
+      ...runnerDeps(provider, { t: T0 }, { OPS_ALERT_PHONE: "+919000000002" }),
+      handlers: losesLeaseThenThrows(),
+    });
+    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
+    assertEquals(provider.sent.length, 0, "no ops alert");
+    const job = await jobRow(jobId);
+    assertEquals(job.status, "running");
+    assertEquals((await eventsForJob(jobId)).map((e) => e.type), []);
   } finally {
     await cleanup({ leadIds: [leadId] });
   }

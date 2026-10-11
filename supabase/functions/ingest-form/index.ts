@@ -11,7 +11,7 @@ import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { handleOptions, json } from "../_shared/http.ts";
-import { ackIdempotencyKey, enqueueJob, nextRunAt } from "../_shared/jobs.ts";
+import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
 import { isCanaryToken } from "../_shared/canary.ts";
 import { captureException } from "../_shared/monitoring.ts";
 import {
@@ -235,27 +235,39 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     } else {
       // The inline send failed: hand the same template to the job queue, which
       // retries with backoff (spec 004, A.5). The lead still gets a 200.
-      await enqueueAckRetry(deps, log, {
+      await enqueueRetry(deps, log, {
         orgId,
         leadId: savedLeadId,
-        enquiryAt: new Date(nowIso),
+        key: ackIdempotencyKey(savedLeadId, new Date(nowIso)),
         to: enquiry.phone,
+        template: "enquiry_ack",
         params: [firstName, org.name],
       });
     }
 
-    // 6. Alert the studio owners. Owner alerts have no lead_id (spec).
+    // 6. Alert the studio owners. Owner alerts have no lead_id (spec). A
+    //    failed alert is retried through the job queue, like the ack.
     const alertParams = [enquiry.name, enquiry.phone, enquiry.bhk ?? "-", enquiry.possessionMonth ?? "-"];
-    await Promise.all(org.owner_alert_phones.map((to) =>
-      sendAndRecord(deps, log, {
+    await Promise.all(org.owner_alert_phones.map(async (to) => {
+      const sent = await sendAndRecord(deps, log, {
         orgId: orgId!,
         leadId: null,
         aboutLeadId: savedLeadId,
         to,
         template: "owner_alert",
         params: alertParams,
-      })
-    ));
+      });
+      if (!sent.ok) {
+        await enqueueRetry(deps, log, {
+          orgId: orgId!,
+          leadId: savedLeadId,
+          key: ownerAlertIdempotencyKey(savedLeadId, new Date(nowIso), to),
+          to,
+          template: "owner_alert",
+          params: alertParams,
+        });
+      }
+    }));
 
     log.add("enquiry_completed", {
       ack_sent: ack.ok,
@@ -355,34 +367,42 @@ async function sendAndRecord(
 }
 
 /**
- * Enqueues a `send_message` job that resends the acknowledgement, first try one
+ * Enqueues a `send_message` job that resends a failed template, first try one
  * minute from now (the first backoff step; the inline send was attempt zero).
- * Keyed on the lead and this enquiry's time, so a replayed request can't
- * enqueue it twice. Never throws: the lead is saved either way.
+ * The idempotency key names the lead and this enquiry's time (and, for owner
+ * alerts, the owner phone), so a replayed request can't enqueue it twice.
+ *
+ * The job's lead_id is the enquiring lead for both templates: deleting the
+ * lead removes its pending retries. For owner alerts the run-jobs handler
+ * checks the recipient against the org's owner_alert_phones instead of the
+ * lead's phone, and records the message without a lead_id.
+ *
+ * Never throws: the lead is saved either way.
  */
-async function enqueueAckRetry(
+async function enqueueRetry(
   deps: Deps,
   log: EventLog,
-  a: { orgId: string; leadId: string; enquiryAt: Date; to: string; params: string[] },
+  r: { orgId: string; leadId: string; key: string; to: string; template: "enquiry_ack" | "owner_alert"; params: string[] },
 ): Promise<void> {
+  const eventPrefix = r.template === "enquiry_ack" ? "ack" : "owner_alert";
   try {
     const jobId = await enqueueJob(deps.db, {
-      org_id: a.orgId,
-      lead_id: a.leadId,
+      org_id: r.orgId,
+      lead_id: r.leadId,
       kind: "send_message",
       run_at: nextRunAt(deps.now(), 1).toISOString(),
-      idempotency_key: ackIdempotencyKey(a.leadId, a.enquiryAt),
+      idempotency_key: r.key,
       payload: {
-        to: a.to,
-        template: "enquiry_ack",
+        to: r.to,
+        template: r.template,
         language: TEMPLATE_LANGUAGE,
-        params: a.params,
-        first_auto_reply: true,
+        params: r.params,
+        first_auto_reply: r.template === "enquiry_ack",
       },
     });
-    log.add("ack_retry_enqueued", { job_id: jobId });
+    log.add(`${eventPrefix}_retry_enqueued`, { job_id: jobId, template: r.template });
   } catch (err) {
-    log.add("ack_retry_enqueue_failed", { error: errorMessage(err) });
+    log.add(`${eventPrefix}_retry_enqueue_failed`, { template: r.template, error: errorMessage(err) });
   }
 }
 
