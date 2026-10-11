@@ -15,7 +15,7 @@ import { runClaimedJobs, type RunOptions } from "./index.ts";
 import { cleanup, db, dbTest, DEMO_ORG, FlakyProvider, insertLead, MIN, purgeTestJobs, uniquePhone } from "./testing.ts";
 
 const H = 60 * MIN;
-const ORG_NAME = "Demo Interiors, Sarjapur Road";
+const ORG_NAME = "Lime & Lattice, Sarjapur Road";
 const ENQ = new Date("2001-03-10T08:30:00.000Z"); // 14:00 IST
 const DAY1 = new Date("2001-03-11T05:30:00.000Z"); // 11:00 IST
 const DAY3 = new Date("2001-03-13T05:30:00.000Z");
