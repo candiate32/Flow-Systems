@@ -3,7 +3,7 @@
 insert into public.orgs (id, name, slug, is_demo, owner_alert_phones, whatsapp_fallback_phone)
 values (
   '00000000-0000-4000-8000-000000000001',
-  'Demo Interiors, Sarjapur Road',
+  'Lime & Lattice, Sarjapur Road',
   'demo-interiors',
   true,
   array['+919000000001'],

@@ -104,7 +104,7 @@ select throws_ok(
 select results_eq(
   $$ select name, slug, is_demo, owner_alert_phones, whatsapp_fallback_phone
        from public.orgs where id = '00000000-0000-4000-8000-000000000001' $$,
-  $$ values ('Demo Interiors, Sarjapur Road'::text, 'demo-interiors'::text, true,
+  $$ values ('Lime & Lattice, Sarjapur Road'::text, 'demo-interiors'::text, true,
              array['+919000000001']::text[], '+919000000001'::text) $$,
   'seed creates the demo org');
 select results_eq(
