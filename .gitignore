@@ -7,3 +7,6 @@ dist
 .DS_Store
 *.log
 coverage
+
+# Graphify knowledge graph, rebuilt locally (see docs/graphify.md)
+graphify-out/
