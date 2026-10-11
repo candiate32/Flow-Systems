@@ -393,3 +393,111 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
     await cleanup([phone.e164], [requestId], []);
   }
 });
+
+// --- details (spec 003, bar 6) ---------------------------------------------
+
+dbTest("details: custom answers are stored on the lead, trimmed, blanks dropped", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const details = { budget: " 10-15L ", rooms: "Kitchen, Living", call_time: "  " };
+  const res = await handler(post(form(phone.national, { details })), deps(provider));
+  const requestId = res.headers.get("X-Request-Id")!;
+  try {
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).duplicate, false);
+    const leads = await leadsFor(phone.e164);
+    assertEquals(leads.length, 1);
+    assertEquals(leads[0].details, { budget: "10-15L", rooms: "Kitchen, Living" });
+  } finally {
+    await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("details: absent details store an empty object", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const res = await handler(post(form(phone.national)), deps(provider));
+  const requestId = res.headers.get("X-Request-Id")!;
+  try {
+    assertEquals(res.status, 200);
+    await res.body?.cancel();
+    assertEquals((await leadsFor(phone.e164))[0].details, {});
+  } finally {
+    await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("details: a repeat enquiry after 24h merges new answers over old", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const t0 = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const first = await handler(
+    post(form(phone.national, { details: { budget: "5-10L", rooms: "Kitchen" } })),
+    deps(provider, () => t0),
+  );
+  const second = await handler(
+    post(form(phone.national, { details: { budget: "10-15L", call_time: "Evening" } })),
+    deps(provider),
+  );
+  const ids = [first.headers.get("X-Request-Id")!, second.headers.get("X-Request-Id")!];
+  try {
+    assertEquals(second.status, 200);
+    assertEquals((await second.json()).duplicate, false);
+    const leads = await leadsFor(phone.e164);
+    assertEquals(leads.length, 1);
+    assertEquals(leads[0].details, { budget: "10-15L", rooms: "Kitchen", call_time: "Evening" });
+  } finally {
+    await first.body?.cancel();
+    await cleanup([phone.e164], ids, provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("details: a duplicate within 24h does not change stored answers", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const t0 = new Date();
+  const first = await handler(post(form(phone.national, { details: { budget: "5-10L" } })), deps(provider, () => t0));
+  const second = await handler(
+    post(form(phone.national, { details: { budget: "50L+" } })),
+    deps(provider, () => new Date(t0.getTime() + 60_000)),
+  );
+  const ids = [first.headers.get("X-Request-Id")!, second.headers.get("X-Request-Id")!];
+  try {
+    assertEquals((await second.json()).duplicate, true);
+    assertEquals((await leadsFor(phone.e164))[0].details, { budget: "5-10L" });
+  } finally {
+    await first.body?.cancel();
+    await cleanup([phone.e164], ids, provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+for (
+  const [label, details] of [
+    ["an array", ["budget"]],
+    ["a string", "budget=10L"],
+    ["11 keys", Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`q${i}`, "x"]))],
+    ["a bad key", { "Budget!": "10L" }],
+    ["a non-string value", { budget: 10 }],
+    ["a value over 200 characters", { note: "a".repeat(201) }],
+  ] as const
+) {
+  dbTest(`details: 400 naming details, no lead and no sends for ${label}`, async () => {
+    const phone = uniquePhone();
+    const provider = new FakeWhatsAppProvider();
+    const res = await handler(post(form(phone.national, { details })), deps(provider));
+    const requestId = res.headers.get("X-Request-Id")!;
+    try {
+      assertEquals(res.status, 400);
+      const out = await res.json();
+      assertEquals(Object.keys(out.errors), ["details"], JSON.stringify(out));
+      assert(typeof out.errors.details === "string" && out.errors.details.length > 0);
+      assertEquals((await leadsFor(phone.e164)).length, 0);
+      assertEquals(provider.sent.length, 0);
+      const events = await eventsFor(requestId);
+      assertEquals(events.map((e) => e.type), ["enquiry_received", "enquiry_invalid"]);
+      assertEquals(events[1].payload, { request_id: requestId, fields: ["details"] });
+    } finally {
+      await cleanup([phone.e164], [requestId], []);
+    }
+  });
+}

@@ -1,6 +1,6 @@
 -- Tables, columns, constraints and seed from docs/specs/002-demo-slice.md.
 begin;
-select plan(40);
+select plan(46);
 
 select has_schema('private');
 select tables_are('public',
@@ -12,7 +12,8 @@ select columns_are('public', 'org_members', array['org_id', 'user_id', 'role', '
 select columns_are('public', 'sources', array['id', 'org_id', 'kind', 'name', 'public_key', 'created_at']);
 select columns_are('public', 'leads',
   array['id', 'org_id', 'source_id', 'name', 'phone_e164', 'bhk', 'possession_month', 'consent_at',
-        'status', 'last_enquiry_at', 'first_auto_reply_at', 'first_human_reply_at', 'last_inbound_at', 'created_at']);
+        'status', 'last_enquiry_at', 'first_auto_reply_at', 'first_human_reply_at', 'last_inbound_at', 'created_at',
+        'details']);
 select columns_are('public', 'messages',
   array['id', 'org_id', 'lead_id', 'to_phone', 'direction', 'kind', 'template_name', 'body', 'provider',
         'provider_message_id', 'status', 'error', 'created_at', 'sent_at']);
@@ -23,6 +24,10 @@ select columns_are('public', 'webhook_events',
 select col_type_is('public', 'leads', 'consent_at', 'timestamp with time zone', 'col_type_is leads consent_at, timestamp with time zone');
 select col_not_null('public', 'leads', 'consent_at', 'col_not_null leads consent_at');
 select col_default_is('public', 'leads', 'status', 'new'::text, 'leads.status defaults to new');
+-- leads.details (spec 003, bar 6)
+select col_type_is('public', 'leads', 'details', 'jsonb', 'col_type_is leads details, jsonb');
+select col_not_null('public', 'leads', 'details', 'col_not_null leads details');
+select col_default_is('public', 'leads', 'details', '{}'::jsonb, 'leads.details defaults to {}');
 select col_default_is('public', 'orgs', 'timezone', 'Asia/Kolkata'::text, 'orgs.timezone defaults to Asia/Kolkata');
 select col_type_is('public', 'orgs', 'owner_alert_phones', 'text[]', 'col_type_is orgs owner_alert_phones, text[]');
 select col_type_is('public', 'events', 'id', 'bigint', 'col_type_is events id, bigint');
@@ -57,6 +62,16 @@ select throws_ok(
   $$ insert into public.leads (org_id, name, phone_e164, consent_at)
      values ('10000000-0000-4000-8000-000000000001', 'Y', '+919811111111', now()) $$,
   '23505', null, 'leads (org_id, phone_e164) is unique');
+select is((select details from public.leads where phone_e164 = '+919811111111'), '{}'::jsonb,
+  'a lead inserted without details gets {}');
+select throws_ok(
+  $$ insert into public.leads (org_id, name, phone_e164, consent_at, details)
+     values ('10000000-0000-4000-8000-000000000001', 'Z', '+919811111112', now(), '["budget"]') $$,
+  '23514', null, 'leads.details rejects a JSON array');
+select throws_ok(
+  $$ insert into public.leads (org_id, name, phone_e164, consent_at, details)
+     values ('10000000-0000-4000-8000-000000000001', 'Z', '+919811111112', now(), '"budget"') $$,
+  '23514', null, 'leads.details rejects a JSON string');
 select throws_ok(
   $$ insert into public.messages (org_id, direction, kind, provider)
      values ('10000000-0000-4000-8000-000000000001', 'sideways', 'template', 'fake') $$,

@@ -13,6 +13,8 @@ export type Enquiry = {
   possessionMonth: string | null;
   consent: true;
   turnstileToken: string | null;
+  /** Answers to the form's custom questions, keyed by field key. Empty when none. */
+  details: Record<string, string>;
 };
 
 export type ParseEnquiryResult =
@@ -20,6 +22,12 @@ export type ParseEnquiryResult =
   | { ok: false; errors: Record<string, string> };
 
 const NAME_MAX = 80;
+
+/** Custom-question answers (`details`), spec 003. Shared with the web form's config validator. */
+export const DETAILS_KEY_RE = /^[a-z][a-z0-9_]{0,31}$/;
+export const DETAILS_MAX_KEYS = 10;
+/** Maximum characters (code points) per value, after trimming. */
+export const DETAILS_VALUE_MAX = 200;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /** Missing, null or blank strings count as "not given" for optional fields. */
@@ -28,6 +36,39 @@ function optionalString(v: unknown): string | null | undefined {
   if (typeof v !== "string") return undefined; // wrong type
   const t = v.trim();
   return t === "" ? null : t;
+}
+
+/**
+ * Validates `details`: absent or null means no answers; otherwise an object of
+ * at most DETAILS_MAX_KEYS keys matching DETAILS_KEY_RE with string values of
+ * at most DETAILS_VALUE_MAX characters. Values are trimmed and blank answers
+ * are dropped. Returns the cleaned object, or a readable error message.
+ */
+function parseDetails(v: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+  if (v === undefined || v === null) return { ok: true, value: {} };
+  if (typeof v !== "object" || Array.isArray(v)) {
+    return { ok: false, error: "Details must be an object of question keys to answers" };
+  }
+  const entries = Object.entries(v as Record<string, unknown>);
+  if (entries.length > DETAILS_MAX_KEYS) {
+    return { ok: false, error: `Details can have at most ${DETAILS_MAX_KEYS} answers` };
+  }
+  const value: Record<string, string> = {};
+  for (const [key, raw] of entries) {
+    if (!DETAILS_KEY_RE.test(key)) {
+      return {
+        ok: false,
+        error: `Details key "${key.slice(0, 40)}" must start with a lowercase letter and use only a-z, 0-9 and _ (max 32)`,
+      };
+    }
+    if (typeof raw !== "string") return { ok: false, error: `Details answer for ${key} must be text` };
+    const t = raw.trim();
+    if ([...t].length > DETAILS_VALUE_MAX) {
+      return { ok: false, error: `Details answer for ${key} must be at most ${DETAILS_VALUE_MAX} characters` };
+    }
+    if (t !== "") value[key] = t;
+  }
+  return { ok: true, value };
 }
 
 /**
@@ -67,7 +108,10 @@ export function parseEnquiry(body: unknown): ParseEnquiryResult {
   const turnstileToken = optionalString(b.turnstile_token);
   if (turnstileToken === undefined) errors.turnstile_token = "Invalid spam-check token";
 
-  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  const details = parseDetails(b.details);
+  if (!details.ok) errors.details = details.error;
+
+  if (!details.ok || Object.keys(errors).length > 0) return { ok: false, errors };
 
   return {
     ok: true,
@@ -79,6 +123,7 @@ export function parseEnquiry(body: unknown): ParseEnquiryResult {
       possessionMonth: possessionMonth ?? null,
       consent: true,
       turnstileToken: turnstileToken ?? null,
+      details: details.value,
     },
   };
 }

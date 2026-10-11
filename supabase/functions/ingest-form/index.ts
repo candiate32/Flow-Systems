@@ -161,7 +161,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const nowIso = now().toISOString();
     const existing = must(
       await db.from("leads")
-        .select("id, last_enquiry_at")
+        .select("id, last_enquiry_at, details")
         .eq("org_id", orgId)
         .eq("phone_e164", enquiry.phone)
         .maybeSingle(),
@@ -196,9 +196,12 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     if (existing) {
       // Repeat enquiry after 24h. Update only if nobody else got there first
       // (a concurrent submit of the same form), otherwise it's a duplicate.
+      // New custom answers replace old ones key by key; unanswered keys are kept.
+      // The last_enquiry_at guard below also guards this read-merge-write.
+      const details = { ...(existing.details as Record<string, Json>), ...enquiry.details };
       const updated = must(
         await db.from("leads")
-          .update(fields)
+          .update({ ...fields, details })
           .eq("id", existing.id)
           .eq("last_enquiry_at", existing.last_enquiry_at)
           .select("id")
@@ -210,7 +213,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       log.add("lead_updated");
     } else {
       const inserted = await db.from("leads")
-        .insert({ org_id: orgId, phone_e164: enquiry.phone, ...fields })
+        .insert({ org_id: orgId, phone_e164: enquiry.phone, ...fields, details: enquiry.details })
         .select("id")
         .single();
       if (inserted.error?.code === "23505") {

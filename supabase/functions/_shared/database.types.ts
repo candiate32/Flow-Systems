@@ -51,14 +51,14 @@ isOneToOne: false
                   ]
                 },"leads": {
                   Row: {
-                    "bhk": string | null,"consent_at": string,"created_at": string,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_inbound_at": string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
+                    "bhk": string | null,"consent_at": string,"created_at": string,"details": NonNullable<Json>,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_inbound_at": string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Update: {
-                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name"?: string,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name"?: string,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Relationships: [
                     {
