@@ -4,7 +4,8 @@ select plan(46);
 
 select has_schema('private');
 select tables_are('public',
-  array['orgs', 'org_members', 'sources', 'leads', 'messages', 'events', 'webhook_events']);
+  array['orgs', 'org_members', 'sources', 'leads', 'messages', 'events', 'webhook_events',
+        'jobs', 'templates', 'audit_log']);
 
 select columns_are('public', 'orgs',
   array['id', 'name', 'slug', 'timezone', 'owner_alert_phones', 'whatsapp_fallback_phone', 'is_demo', 'created_at']);
@@ -16,7 +17,7 @@ select columns_are('public', 'leads',
         'details']);
 select columns_are('public', 'messages',
   array['id', 'org_id', 'lead_id', 'to_phone', 'direction', 'kind', 'template_name', 'body', 'provider',
-        'provider_message_id', 'status', 'error', 'created_at', 'sent_at']);
+        'provider_message_id', 'status', 'error', 'created_at', 'sent_at', 'job_id']);
 select columns_are('public', 'events', array['id', 'org_id', 'lead_id', 'type', 'payload', 'created_at']);
 select columns_are('public', 'webhook_events',
   array['id', 'provider', 'provider_event_id', 'payload', 'received_at', 'processed_at']);

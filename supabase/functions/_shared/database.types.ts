@@ -23,7 +23,27 @@ export type Database = {
           }
         },"public": {
           Tables: {
-            "events": {
+            "audit_log": {
+                  Row: {
+                    "action": string,"actor": string,"at": string,"details": NonNullable<Json>,"id": number,"org_id": string,"target": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "action": string,"actor": string,"at"?: string,"details"?: NonNullable<Json>,"id"?: never,"org_id": string,"target"?: string | null
+                  }
+                  Update: {
+                    "action"?: string,"actor"?: string,"at"?: string,"details"?: NonNullable<Json>,"id"?: never,"org_id"?: string,"target"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "audit_log_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"events": {
                   Row: {
                     "created_at": string,"id": number,"lead_id": string | null,"org_id": string,"payload": NonNullable<Json>,"type": string
                   }
@@ -43,6 +63,32 @@ isOneToOne: false
       referencedColumns: ["id"]
     },{
       foreignKeyName: "events_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"jobs": {
+                  Row: {
+                    "attempts": number,"created_at": string,"id": string,"idempotency_key": string,"kind": string,"last_error": string | null,"lead_id": string | null,"max_attempts": number,"org_id": string,"payload": NonNullable<Json>,"run_at": string,"status": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "attempts"?: number,"created_at"?: string,"id"?: string,"idempotency_key": string,"kind": string,"last_error"?: string | null,"lead_id"?: string | null,"max_attempts"?: number,"org_id": string,"payload"?: NonNullable<Json>,"run_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "attempts"?: number,"created_at"?: string,"id"?: string,"idempotency_key"?: string,"kind"?: string,"last_error"?: string | null,"lead_id"?: string | null,"max_attempts"?: number,"org_id"?: string,"payload"?: NonNullable<Json>,"run_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "jobs_lead_id_fkey"
+      columns: ["lead_id"]
+isOneToOne: false
+      referencedRelation: "leads"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "jobs_org_id_fkey"
       columns: ["org_id"]
 isOneToOne: false
       referencedRelation: "orgs"
@@ -77,17 +123,23 @@ isOneToOne: false
                   ]
                 },"messages": {
                   Row: {
-                    "body": string | null,"created_at": string,"direction": string,"error": string | null,"id": string,"kind": string,"lead_id": string | null,"org_id": string,"provider": string,"provider_message_id": string | null,"sent_at": string | null,"status": string,"template_name": string | null,"to_phone": string | null
+                    "body": string | null,"created_at": string,"direction": string,"error": string | null,"id": string,"job_id": string | null,"kind": string,"lead_id": string | null,"org_id": string,"provider": string,"provider_message_id": string | null,"sent_at": string | null,"status": string,"template_name": string | null,"to_phone": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "body"?: string | null,"created_at"?: string,"direction": string,"error"?: string | null,"id"?: string,"kind": string,"lead_id"?: string | null,"org_id": string,"provider": string,"provider_message_id"?: string | null,"sent_at"?: string | null,"status"?: string,"template_name"?: string | null,"to_phone"?: string | null
+                    "body"?: string | null,"created_at"?: string,"direction": string,"error"?: string | null,"id"?: string,"job_id"?: string | null,"kind": string,"lead_id"?: string | null,"org_id": string,"provider": string,"provider_message_id"?: string | null,"sent_at"?: string | null,"status"?: string,"template_name"?: string | null,"to_phone"?: string | null
                   }
                   Update: {
-                    "body"?: string | null,"created_at"?: string,"direction"?: string,"error"?: string | null,"id"?: string,"kind"?: string,"lead_id"?: string | null,"org_id"?: string,"provider"?: string,"provider_message_id"?: string | null,"sent_at"?: string | null,"status"?: string,"template_name"?: string | null,"to_phone"?: string | null
+                    "body"?: string | null,"created_at"?: string,"direction"?: string,"error"?: string | null,"id"?: string,"job_id"?: string | null,"kind"?: string,"lead_id"?: string | null,"org_id"?: string,"provider"?: string,"provider_message_id"?: string | null,"sent_at"?: string | null,"status"?: string,"template_name"?: string | null,"to_phone"?: string | null
                   }
                   Relationships: [
                     {
+      foreignKeyName: "messages_job_id_fkey"
+      columns: ["job_id"]
+isOneToOne: false
+      referencedRelation: "jobs"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "messages_lead_id_fkey"
       columns: ["lead_id"]
 isOneToOne: false
@@ -155,6 +207,26 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"templates": {
+                  Row: {
+                    "body": string,"category": string,"created_at": string,"id": string,"language": string,"name": string,"org_id": string,"param_names": (string)[],"provider_template_id": string | null,"status": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "body": string,"category"?: string,"created_at"?: string,"id"?: string,"language"?: string,"name": string,"org_id": string,"param_names"?: (string)[],"provider_template_id"?: string | null,"status"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "body"?: string,"category"?: string,"created_at"?: string,"id"?: string,"language"?: string,"name"?: string,"org_id"?: string,"param_names"?: (string)[],"provider_template_id"?: string | null,"status"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "templates_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"webhook_events": {
                   Row: {
                     "id": number,"payload": NonNullable<Json>,"processed_at": string | null,"provider": string,"provider_event_id": string,"received_at": string
@@ -175,7 +247,28 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            [_ in never]: never
+            "claim_jobs":
+{ Args: { "as_of"?: string,"batch": number }; Returns: {
+              "attempts": number,
+"created_at": string,
+"id": string,
+"idempotency_key": string,
+"kind": string,
+"last_error": string | null,
+"lead_id": string | null,
+"max_attempts": number,
+"org_id": string,
+"payload": NonNullable<Json>,
+"run_at": string,
+"status": string,
+"updated_at": string
+            }[]
+                          SetofOptions: {
+        from: "*"
+        to: "jobs"
+        isOneToOne: false
+        isSetofReturn: true
+      } }
           }
           Enums: {
             [_ in never]: never
