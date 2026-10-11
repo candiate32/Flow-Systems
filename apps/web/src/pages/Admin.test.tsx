@@ -12,6 +12,7 @@ const leads: Lead[] = [
     bhk: '3BHK',
     created_at: '2026-10-11T04:30:00.000Z',
     first_auto_reply_at: '2026-10-11T04:30:07.400Z',
+    details: { budget_band: '₹8–15L', scope: 'Full home' },
   },
   {
     id: '2',
@@ -20,6 +21,7 @@ const leads: Lead[] = [
     bhk: null,
     created_at: '2026-10-10T18:45:00.000Z',
     first_auto_reply_at: null,
+    details: {},
   },
 ]
 
@@ -76,6 +78,10 @@ describe('admin page', () => {
     expect(first[3]).toMatch(/11 Oct 2026/)
     expect(first[3]).toMatch(/10:00/)
     expect(first[4]).toBe('7s')
+    expect(mocks.query.select).toHaveBeenCalledWith(expect.stringContaining('details'))
+    const details = within(rows[0]).getByLabelText('Details')
+    expect(details.textContent).toBe('Budget band₹8–15LScopeFull home')
+    expect(within(rows[1]).queryByLabelText('Details')).toBeNull()
 
     const second = within(rows[1]).getAllByRole('cell').map((c) => c.textContent)
     expect(second[0]).toMatch(/^Ravi Kumar/)

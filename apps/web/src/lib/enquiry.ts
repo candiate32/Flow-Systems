@@ -1,4 +1,4 @@
-import { demoSourceKey, supabasePublishableKey, supabaseUrl } from './config'
+import { supabasePublishableKey, supabaseUrl } from './config'
 
 export const BHK_OPTIONS = ['1BHK', '2BHK', '3BHK', '4BHK+', 'Villa', 'Office'] as const
 
@@ -8,6 +8,8 @@ export type EnquiryForm = {
   bhk: string
   possessionMonth: string
   consent: boolean
+  /** Custom-question answers, keyed by the config's field key (spec 003). */
+  details?: Record<string, string>
 }
 
 export type FieldErrors = Partial<Record<string, string>>
@@ -40,23 +42,30 @@ export function validateEnquiry(form: EnquiryForm): FieldErrors {
 }
 
 export type SubmitResult =
-  | { kind: 'success'; duplicate: boolean }
+  | { kind: 'success'; duplicate: boolean; ackSent: boolean }
   | { kind: 'invalid'; errors: FieldErrors }
   | { kind: 'failed' }
 
-export async function submitEnquiry(
-  form: EnquiryForm,
-  turnstileToken: string | null,
-): Promise<SubmitResult> {
-  const body = {
-    source_key: demoSourceKey(),
+/** The JSON body ingest-form expects. Blank optional answers are sent as null / left out. */
+export function enquiryBody(form: EnquiryForm, turnstileToken: string | null, sourceKey: string) {
+  return {
+    source_key: sourceKey,
     name: form.name.trim(),
     phone: form.phone.trim(),
     bhk: form.bhk || null,
     possession_month: form.possessionMonth || null,
     consent: form.consent,
     turnstile_token: turnstileToken,
+    details: form.details ?? {},
   }
+}
+
+export async function submitEnquiry(
+  form: EnquiryForm,
+  turnstileToken: string | null,
+  sourceKey: string,
+): Promise<SubmitResult> {
+  const body = enquiryBody(form, turnstileToken, sourceKey)
   let res: Response
   try {
     res = await fetch(`${supabaseUrl()}/functions/v1/ingest-form`, {
@@ -72,8 +81,9 @@ export async function submitEnquiry(
   }
   const data: unknown = await res.json().catch(() => null)
   if (res.ok) {
-    const duplicate = !!(data && typeof data === 'object' && (data as { duplicate?: unknown }).duplicate === true)
-    return { kind: 'success', duplicate }
+    const flags = (data && typeof data === 'object' ? data : {}) as { duplicate?: unknown; ack_sent?: unknown }
+    // ack_sent is false when the lead was saved but the WhatsApp reply could not be sent.
+    return { kind: 'success', duplicate: flags.duplicate === true, ackSent: flags.ack_sent !== false }
   }
   if (res.status === 400 && data && typeof data === 'object') {
     const errors = (data as { errors?: unknown }).errors
