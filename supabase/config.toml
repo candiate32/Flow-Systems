@@ -438,3 +438,12 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/ingest-form/deno.json"
 entrypoint = "./functions/ingest-form/index.ts"
+
+# Job runner, called every minute by pg_cron through pg_net (spec 004, A.3).
+# No JWT: it checks the x-run-jobs-secret header against RUN_JOBS_SECRET and
+# answers 401 without it (or when RUN_JOBS_SECRET is unset).
+[functions.run-jobs]
+enabled = true
+verify_jwt = false
+import_map = "./functions/run-jobs/deno.json"
+entrypoint = "./functions/run-jobs/index.ts"

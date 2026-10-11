@@ -240,6 +240,9 @@ dbTest("happy path: saves one lead, acks it, alerts each owner, logs every step"
       "enquiry_completed",
     ]);
     assert(events.every((e) => e.lead_id === lead.id));
+
+    const { count: jobCount } = await db.from("jobs").select("id", { count: "exact", head: true }).eq("lead_id", lead.id);
+    assertEquals(jobCount, 0, "a successful ack enqueues no retry");
   } finally {
     await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
   }
@@ -360,7 +363,8 @@ class FailingProvider implements WhatsAppProvider {
 dbTest("provider failure: lead saved, failed messages and send_failed events, 200 with ack_sent:false", async () => {
   const phone = uniquePhone();
   const provider = new FailingProvider();
-  const res = await handler(post(form(phone.national)), deps(provider));
+  const t = new Date();
+  const res = await handler(post(form(phone.national)), deps(provider, () => t));
   const requestId = res.headers.get("X-Request-Id")!;
   const leads = await leadsFor(phone.e164);
   try {
@@ -384,6 +388,29 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
     const failed = events.filter((e) => e.type === "send_failed");
     assertEquals(failed.length, 1 + DEMO_OWNER_PHONES.length);
     assert(events.some((e) => e.type === "enquiry_completed"));
+
+    // Spec 004, A.5: the failed ack is handed to the job queue.
+    const { data: jobs } = await db.from("jobs").select("*").eq("lead_id", leads[0].id);
+    assertEquals(jobs!.length, 1);
+    const job = jobs![0];
+    assertEquals(job.kind, "send_message");
+    assertEquals(job.status, "queued");
+    assertEquals(job.attempts, 0);
+    assertEquals(job.max_attempts, 5);
+    assertEquals(job.org_id, DEMO_ORG);
+    assertEquals(job.idempotency_key, `ack:${leads[0].id}:${t.toISOString()}`);
+    assertEquals(new Date(leads[0].last_enquiry_at).getTime(), t.getTime());
+    assertEquals(new Date(job.run_at).getTime(), t.getTime() + 60_000, "first retry one minute later");
+    assertEquals(job.payload, {
+      to: phone.e164,
+      template: "enquiry_ack",
+      language: "en",
+      params: ["Asha", "Demo Interiors, Sarjapur Road"],
+      first_auto_reply: true,
+    });
+    const enqueued = events.filter((e) => e.type === "ack_retry_enqueued");
+    assertEquals(enqueued.length, 1);
+    assertEquals((enqueued[0].payload as { job_id: string }).job_id, job.id);
   } finally {
     // Failed owner alerts have no lead_id and no provider id; remove them by recipient and time.
     for (const to of DEMO_OWNER_PHONES) {
