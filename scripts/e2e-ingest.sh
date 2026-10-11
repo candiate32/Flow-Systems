@@ -8,7 +8,7 @@ sql() { docker exec -i "$DB" psql -U postgres -tAc "$1"; }
 PHONE="98450$(printf '%05d' $((RANDOM % 100000)))"
 E164="+91$PHONE"
 body() { printf '{"source_key":"demo-web-form","name":"E2E Test","phone":"%s","bhk":"3BHK","possession_month":"2027-03","consent":%s}' "$1" "$2"; }
-fail() { echo "FAIL: $*"; exit 1; }
+fail() { echo "FAIL: $*"; [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error title=e2e-ingest::$*"; exit 1; }
 
 start=$(date +%s%N)
 out=$(curl -sS -w '\n%{http_code}' -X POST "$URL" -H 'content-type: application/json' -d "$(body "$PHONE" true)")

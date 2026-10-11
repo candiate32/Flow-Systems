@@ -63,7 +63,9 @@ jobs:
             sleep 2
           done
           # Warm the worker so the timed request doesn't include a cold boot.
-          curl -s -o /dev/null -X POST http://127.0.0.1:54321/functions/v1/ingest-form -H 'content-type: application/json' -d '{}' || true
+          # A full valid enquiry warms the database client too, not just the worker.
+          curl -s -o /dev/null -X POST http://127.0.0.1:54321/functions/v1/ingest-form -H 'content-type: application/json' \
+            -d '{"source_key":"demo-web-form","name":"Warm Up","phone":"9000000099","consent":true}' || true
           scripts/e2e-ingest.sh
       - if: failure()
         name: Show function logs
