@@ -26,7 +26,7 @@ jobs:
       - run: npm run build
 
   functions:
-    name: Edge Functions (deno check)
+    name: Edge Functions (deno check, deno test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +34,7 @@ jobs:
         with:
           deno-version: v2.x
       - run: deno check supabase/functions/*/index.ts
+      - run: deno test supabase/functions
 
   database:
     name: Database (supabase test db)
