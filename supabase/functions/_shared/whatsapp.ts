@@ -1,4 +1,6 @@
-export type TemplateName = "enquiry_ack" | "followup" | "owner_alert";
+/** Templates the engine sends. `ops_alert` goes to Flow Systems ops, not to a studio's leads. */
+export const TEMPLATE_NAMES = ["enquiry_ack", "followup", "owner_alert", "ops_alert"] as const;
+export type TemplateName = typeof TEMPLATE_NAMES[number];
 
 export type TemplateMessage = {
   /** E.164 */

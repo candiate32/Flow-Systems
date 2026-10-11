@@ -7,9 +7,11 @@
 // deno-lint-ignore no-import-prefix
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type { Database, Json } from "../_shared/database.types.ts";
+import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { handleOptions, json } from "../_shared/http.ts";
+import { ackIdempotencyKey, enqueueJob, nextRunAt } from "../_shared/jobs.ts";
 import {
   getWhatsAppProvider,
   type TemplateName,
@@ -70,25 +72,6 @@ class EventLog {
       console.error(JSON.stringify({ fn: "ingest-form", request_id: this.requestId, events_insert_failed: error.message, rows }));
     }
   }
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err) return String((err as { message: unknown }).message);
-  return String(err);
-}
-
-/** Turns a supabase-js `{ data, error }` result into data or a thrown error. */
-function must<T>(res: { data: T; error: { message: string; code?: string } | null }, what: string): T {
-  if (res.error) throw Object.assign(new Error(`${what}: ${res.error.message}`), { code: res.error.code });
-  return res.data;
-}
-
-/** Like `must`, for queries that must return a row (`.single()`). */
-function mustRow<T>(res: { data: T; error: { message: string; code?: string } | null }, what: string): NonNullable<T> {
-  const data = must(res, what);
-  if (data === null || data === undefined) throw new Error(`${what}: no row returned`);
-  return data;
 }
 
 function withRequestId(res: Response, requestId: string): Response {
@@ -247,6 +230,16 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
           .is("first_auto_reply_at", null),
         "set first_auto_reply_at",
       );
+    } else {
+      // The inline send failed: hand the same template to the job queue, which
+      // retries with backoff (spec 004, A.5). The lead still gets a 200.
+      await enqueueAckRetry(deps, log, {
+        orgId,
+        leadId: savedLeadId,
+        enquiryAt: new Date(nowIso),
+        to: enquiry.phone,
+        params: [firstName, org.name],
+      });
     }
 
     // 6. Alert the studio owners. Owner alerts have no lead_id (spec).
@@ -356,6 +349,38 @@ async function sendAndRecord(
     message_id: message.id,
   });
   return { ok: true, sentAt };
+}
+
+/**
+ * Enqueues a `send_message` job that resends the acknowledgement, first try one
+ * minute from now (the first backoff step; the inline send was attempt zero).
+ * Keyed on the lead and this enquiry's time, so a replayed request can't
+ * enqueue it twice. Never throws: the lead is saved either way.
+ */
+async function enqueueAckRetry(
+  deps: Deps,
+  log: EventLog,
+  a: { orgId: string; leadId: string; enquiryAt: Date; to: string; params: string[] },
+): Promise<void> {
+  try {
+    const jobId = await enqueueJob(deps.db, {
+      org_id: a.orgId,
+      lead_id: a.leadId,
+      kind: "send_message",
+      run_at: nextRunAt(deps.now(), 1).toISOString(),
+      idempotency_key: ackIdempotencyKey(a.leadId, a.enquiryAt),
+      payload: {
+        to: a.to,
+        template: "enquiry_ack",
+        language: TEMPLATE_LANGUAGE,
+        params: a.params,
+        first_auto_reply: true,
+      },
+    });
+    log.add("ack_retry_enqueued", { job_id: jobId });
+  } catch (err) {
+    log.add("ack_retry_enqueue_failed", { error: errorMessage(err) });
+  }
 }
 
 /** Cloudflare Turnstile check. Skipped (passes) when TURNSTILE_SECRET is unset. */
