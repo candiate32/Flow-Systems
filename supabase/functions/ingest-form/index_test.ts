@@ -3,6 +3,7 @@ import { assert, assertEquals, assertExists } from "jsr:@std/assert@1";
 // deno-lint-ignore no-import-prefix -- see index.ts
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Database } from "../_shared/database.types.ts";
+import { followUpJobs } from "../_shared/followups.ts";
 import { FakeWhatsAppProvider, type TemplateMessage, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { type Deps, handler, makeVerifyTurnstile } from "./index.ts";
 
@@ -171,6 +172,14 @@ async function eventsFor(requestId: string) {
 const dbTest = (name: string, fn: () => Promise<void>) =>
   Deno.test({ name, ignore: NO_DB, sanitizeOps: false, sanitizeResources: false, fn });
 
+/** The lead's follow-up jobs in run order, run_at as an ISO string. */
+async function followUpJobsFor(leadId: string) {
+  const { data, error } = await db.from("jobs").select("*").eq("lead_id", leadId).eq("kind", "followup")
+    .order("run_at").order("idempotency_key");
+  if (error) throw error;
+  return data.map((j) => ({ ...j, run_at: new Date(j.run_at).toISOString() }));
+}
+
 dbTest("happy path: saves one lead, acks it, alerts each owner, logs every step", async () => {
   const phone = uniquePhone();
   const provider = new FakeWhatsAppProvider();
@@ -237,12 +246,67 @@ dbTest("happy path: saves one lead, acks it, alerts each owner, logs every step"
       "lead_created",
       "ack_sent",
       ...DEMO_OWNER_PHONES.map(() => "owner_alert_sent"),
+      "followups_scheduled",
       "enquiry_completed",
     ]);
     assert(events.every((e) => e.lead_id === lead.id));
 
-    const { count: jobCount } = await db.from("jobs").select("id", { count: "exact", head: true }).eq("lead_id", lead.id);
+    const { count: jobCount } = await db.from("jobs").select("id", { count: "exact", head: true })
+      .eq("lead_id", lead.id).eq("kind", "send_message");
     assertEquals(jobCount, 0, "a successful ack enqueues no retry");
+
+    // Spec 004, B.1: three follow-ups for this enquiry.
+    const followUps = await followUpJobsFor(lead.id);
+    assertEquals(
+      followUps.map((j) => [j.run_at, j.idempotency_key, j.payload, j.status]),
+      followUpJobs(lead.id, new Date(lead.last_enquiry_at)).map((j) => [j.run_at, j.idempotency_key, j.payload, "queued"]),
+    );
+    const scheduled = events.find((e) => e.type === "followups_scheduled")!;
+    assertEquals((scheduled.payload as { job_ids: string[] }).job_ids.sort(), followUps.map((j) => j.id).sort());
+  } finally {
+    await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("follow-ups: an enquiry at 14:00 IST queues three at 11:00 IST on day 1, 3 and 7 (spec 004, B.1)", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const at = new Date("2001-03-10T08:30:00.000Z"); // Sat 2001-03-10 14:00 IST
+  const res = await handler(post(form(phone.national)), deps(provider, () => at));
+  const requestId = res.headers.get("X-Request-Id")!;
+  try {
+    const { lead_id: leadId } = await res.json();
+    const jobs = await followUpJobsFor(leadId);
+    assertEquals(jobs.map((j) => [j.run_at, j.idempotency_key, j.payload, j.kind, j.status, j.org_id]), [
+      ["2001-03-11T05:30:00.000Z", `followup:${leadId}:1:2001-03-10T08:30:00.000Z`, { n: 1, enquiry_at: at.toISOString() }],
+      ["2001-03-13T05:30:00.000Z", `followup:${leadId}:2:2001-03-10T08:30:00.000Z`, { n: 2, enquiry_at: at.toISOString() }],
+      ["2001-03-17T05:30:00.000Z", `followup:${leadId}:3:2001-03-10T08:30:00.000Z`, { n: 3, enquiry_at: at.toISOString() }],
+    ].map((j) => [...j, "followup", "queued", DEMO_ORG]));
+  } finally {
+    await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("follow-ups: a scheduling failure is logged and the enquiry still succeeds", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  // The real client, except that every RPC fails.
+  const failingRpc = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === "rpc") return () => Promise.resolve({ data: null, error: { message: "rpc down" } });
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  const res = await handler(post(form(phone.national)), { ...deps(provider), db: failingRpc });
+  const requestId = res.headers.get("X-Request-Id")!;
+  try {
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.ack_sent, true);
+    assertEquals((await followUpJobsFor(body.lead_id)).length, 0);
+    const failed = (await eventsFor(requestId)).filter((e) => e.type === "followups_schedule_failed");
+    assertEquals(failed.length, 1);
+    assert((failed[0].payload as { error: string }).error.includes("rpc down"));
   } finally {
     await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
   }
@@ -272,6 +336,10 @@ dbTest("duplicate within 24h: 200 with duplicate:true, nothing new sent", async 
     const events = await eventsFor(ids[1]);
     assert(events.some((e) => e.type === "duplicate_enquiry"));
     assert(!events.some((e) => e.type === "ack_sent"));
+
+    // Follow-ups stay those of the first enquiry.
+    const followUps = await followUpJobsFor(firstBody.lead_id);
+    assertEquals(followUps.map((j) => [j.idempotency_key, j.status]), followUpJobs(firstBody.lead_id, t0).map((j) => [j.idempotency_key, "queued"]));
   } finally {
     await cleanup([phone.e164], ids, provider.sent.map((s) => s.providerMessageId));
   }
@@ -290,7 +358,31 @@ dbTest("a repeat enquiry after 24h is handled as a new enquiry", async () => {
     assertEquals(body.duplicate, false);
     assertEquals((await leadsFor(phone.e164)).length, 1);
     assertEquals(provider.sent.length, 2 * (1 + DEMO_OWNER_PHONES.length));
-    assert((await eventsFor(ids[1])).some((e) => e.type === "lead_updated"));
+    const events = await eventsFor(ids[1]);
+    assert(events.some((e) => e.type === "lead_updated"));
+
+    // The first enquiry's queued follow-ups are cancelled and a fresh set is queued.
+    const lead = (await leadsFor(phone.e164))[0];
+    const followUps = await followUpJobsFor(body.lead_id);
+    const fresh = followUpJobs(body.lead_id, new Date(lead.last_enquiry_at));
+    const old = followUpJobs(body.lead_id, t0);
+    assertEquals(
+      followUps.filter((j) => j.status === "queued").map((j) => [j.idempotency_key, j.run_at]),
+      fresh.map((j) => [j.idempotency_key, j.run_at]),
+    );
+    const cancelled = followUps.filter((j) => j.status === "cancelled");
+    assertEquals(cancelled.map((j) => j.idempotency_key).sort(), old.map((j) => j.idempotency_key).sort());
+    assertEquals(followUps.length, 6);
+    const scheduled = events.find((e) => e.type === "followups_scheduled")!;
+    assertEquals(
+      (scheduled.payload as { cancelled_job_ids: string[] }).cancelled_job_ids.sort(),
+      cancelled.map((j) => j.id).sort(),
+    );
+    const { data: cancelEvents } = await db.from("events").select("payload").eq("lead_id", body.lead_id).eq("type", "job_cancelled");
+    assertEquals(
+      cancelEvents!.map((e) => (e.payload as { reason: string }).reason),
+      ["superseded by a new enquiry", "superseded by a new enquiry", "superseded by a new enquiry"],
+    );
   } finally {
     await cleanup([phone.e164], ids, provider.sent.map((s) => s.providerMessageId));
   }
@@ -393,8 +485,10 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
     assert(events.some((e) => e.type === "enquiry_completed"));
 
     // Spec 004, A.5: the failed ack and each failed owner alert are handed to the job queue.
-    const { data: jobs } = await db.from("jobs").select("*").eq("lead_id", leads[0].id);
+    const { data: jobs } = await db.from("jobs").select("*").eq("lead_id", leads[0].id).eq("kind", "send_message");
     assertEquals(jobs!.length, 1 + DEMO_OWNER_PHONES.length);
+    // Follow-ups are scheduled whether or not the ack went out.
+    assertEquals((await followUpJobsFor(leads[0].id)).length, 3);
     for (const j of jobs!) {
       assertEquals(j.kind, "send_message");
       assertEquals(j.status, "queued");

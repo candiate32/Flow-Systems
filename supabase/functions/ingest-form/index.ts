@@ -1,6 +1,7 @@
 // ingest-form: the public enquiry form endpoint (docs/specs/002-demo-slice.md,
 // "ingest-form"). Validates the enquiry, saves the lead, sends the WhatsApp
-// acknowledgement and owner alerts, and logs every step to `events`.
+// acknowledgement and owner alerts, schedules the day 1/3/7 follow-ups
+// (spec 004, B.1), and logs every step to `events`.
 // Full specifier on purpose: `deno check`/`deno test` from the repo root don't
 // read this folder's deno.json, and the root package.json would otherwise make
 // Deno look for the package in node_modules (absent in CI's functions job).
@@ -10,6 +11,7 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
+import { scheduleFollowUps } from "../_shared/followups.ts";
 import { handleOptions, json } from "../_shared/http.ts";
 import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
 import {
@@ -267,6 +269,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       }
     }));
 
+    // 7. Follow-ups on day 1, 3 and 7 (spec 004, B.1). A repeat enquiry after
+    //    24h replaces the lead's queued set. Whether each one is still wanted
+    //    (reply, opt-out, consent) is decided when it runs.
+    await scheduleFollowUpsLogged(deps, log, savedLeadId, new Date(nowIso));
+
     log.add("enquiry_completed", {
       ack_sent: ack.ok,
       duration_ms: now().getTime() - startedAt.getTime(),
@@ -400,6 +407,16 @@ async function enqueueRetry(
     log.add(`${eventPrefix}_retry_enqueued`, { job_id: jobId, template: r.template });
   } catch (err) {
     log.add(`${eventPrefix}_retry_enqueue_failed`, { template: r.template, error: errorMessage(err) });
+  }
+}
+
+/** Enqueues the enquiry's follow-ups. Never throws: the lead is saved and acknowledged either way. */
+async function scheduleFollowUpsLogged(deps: Deps, log: EventLog, leadId: string, enquiryAt: Date): Promise<void> {
+  try {
+    const { enqueued, cancelled } = await scheduleFollowUps(deps.db, leadId, enquiryAt, deps.now());
+    log.add("followups_scheduled", { job_ids: enqueued, cancelled_job_ids: cancelled });
+  } catch (err) {
+    log.add("followups_schedule_failed", { error: errorMessage(err) });
   }
 }
 
