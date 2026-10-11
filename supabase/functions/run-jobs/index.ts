@@ -43,11 +43,13 @@ export type RunSummary = {
   cancelled: number;
   retried: number;
   dead: number;
+  /** Jobs another runner took over (lease expired) before this one could settle them. */
+  lost: number;
   /** Jobs whose outcome could not be recorded; their lease expires and they are retried. */
   errors: number;
 };
 
-type Outcome = "done" | "cancelled" | "retried" | "dead";
+type Outcome = "done" | "cancelled" | "retried" | "dead" | "lost";
 
 const DEFAULT_BATCH = 10;
 // pg_net waits 55 s; cron fires every 60 s. Overlapping runs are safe anyway
@@ -60,7 +62,7 @@ export async function runClaimedJobs(deps: Deps, opts: RunOptions = {}): Promise
   const budget = opts.timeBudgetMs ?? DEFAULT_BUDGET_MS;
   const handlers: Partial<Record<string, JobHandler>> = { ...defaultHandlers, ...deps.handlers };
   const started = performance.now();
-  const summary: RunSummary = { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, errors: 0 };
+  const summary: RunSummary = { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 };
 
   while (performance.now() - started < budget) {
     const jobs = must(
@@ -98,12 +100,12 @@ async function runOne(job: Job, handlers: Partial<Record<string, JobHandler>>, d
       return await deadLetter(job, deps, error);
     }
     const runAt = nextRunAt(deps.now(), job.attempts).toISOString();
-    await settle(job, deps, { status: "queued", run_at: runAt, last_error: error });
+    if (!(await settle(job, deps, { status: "queued", run_at: runAt, last_error: error }))) return "lost";
     await addEvent(deps, job, "job_retry_scheduled", { attempt: job.attempts, error, run_at: runAt });
     return "retried";
   }
 
-  await settle(job, deps, { status: outcome.status });
+  if (!(await settle(job, deps, { status: outcome.status }))) return "lost";
   if (outcome.status === "cancelled") await addEvent(deps, job, "job_cancelled", { reason: outcome.reason });
   return outcome.status;
 }
@@ -119,10 +121,15 @@ function contextFor(deps: Deps): JobContext {
 
 /**
  * Records a job's new state, but only if this runner still holds it (same
- * attempt, still running). Otherwise its lease expired and another runner
- * owns it now.
+ * attempt, still running). Returns false when its lease expired and another
+ * runner owns it now: the caller then records nothing else (no retry or dead
+ * events, no ops alert), since the job's fate is the other runner's call.
  */
-async function settle(job: Job, deps: Deps, update: Database["public"]["Tables"]["jobs"]["Update"]) {
+async function settle(
+  job: Job,
+  deps: Deps,
+  update: Database["public"]["Tables"]["jobs"]["Update"],
+): Promise<boolean> {
   const rows = must(
     await deps.db.from("jobs")
       .update({ ...update, updated_at: deps.now().toISOString() })
@@ -132,11 +139,13 @@ async function settle(job: Job, deps: Deps, update: Database["public"]["Tables"]
       .select("id"),
     "settle job",
   );
-  if (!rows?.length) log({ job_id: job.id, lost_lease: true, wanted: update.status });
+  if (rows?.length) return true;
+  log({ job_id: job.id, lost_lease: true, wanted: update.status });
+  return false;
 }
 
-async function deadLetter(job: Job, deps: Deps, error: string): Promise<"dead"> {
-  await settle(job, deps, { status: "dead", last_error: error });
+async function deadLetter(job: Job, deps: Deps, error: string): Promise<"dead" | "lost"> {
+  if (!(await settle(job, deps, { status: "dead", last_error: error }))) return "lost";
   await addEvent(deps, job, "job_dead", { attempts: job.attempts, max_attempts: job.max_attempts, error });
   await alertOps(job, deps, error);
   return "dead";
