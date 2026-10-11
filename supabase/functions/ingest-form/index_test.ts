@@ -389,18 +389,21 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
     assertEquals(failed.length, 1 + DEMO_OWNER_PHONES.length);
     assert(events.some((e) => e.type === "enquiry_completed"));
 
-    // Spec 004, A.5: the failed ack is handed to the job queue.
+    // Spec 004, A.5: the failed ack and each failed owner alert are handed to the job queue.
     const { data: jobs } = await db.from("jobs").select("*").eq("lead_id", leads[0].id);
-    assertEquals(jobs!.length, 1);
-    const job = jobs![0];
-    assertEquals(job.kind, "send_message");
-    assertEquals(job.status, "queued");
-    assertEquals(job.attempts, 0);
-    assertEquals(job.max_attempts, 5);
-    assertEquals(job.org_id, DEMO_ORG);
-    assertEquals(job.idempotency_key, `ack:${leads[0].id}:${t.toISOString()}`);
+    assertEquals(jobs!.length, 1 + DEMO_OWNER_PHONES.length);
+    for (const j of jobs!) {
+      assertEquals(j.kind, "send_message");
+      assertEquals(j.status, "queued");
+      assertEquals(j.attempts, 0);
+      assertEquals(j.max_attempts, 5);
+      assertEquals(j.org_id, DEMO_ORG);
+      assertEquals(new Date(j.run_at).getTime(), t.getTime() + 60_000, "first retry one minute later");
+    }
     assertEquals(new Date(leads[0].last_enquiry_at).getTime(), t.getTime());
-    assertEquals(new Date(job.run_at).getTime(), t.getTime() + 60_000, "first retry one minute later");
+
+    const job = jobs!.find((j) => (j.payload as { template: string }).template === "enquiry_ack")!;
+    assertEquals(job.idempotency_key, `ack:${leads[0].id}:${t.toISOString()}`);
     assertEquals(job.payload, {
       to: phone.e164,
       template: "enquiry_ack",
@@ -411,6 +414,27 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
     const enqueued = events.filter((e) => e.type === "ack_retry_enqueued");
     assertEquals(enqueued.length, 1);
     assertEquals((enqueued[0].payload as { job_id: string }).job_id, job.id);
+
+    const alertJobs = jobs!.filter((j) => (j.payload as { template: string }).template === "owner_alert");
+    assertEquals(
+      alertJobs.map((j) => j.idempotency_key).sort(),
+      DEMO_OWNER_PHONES.map((to) => `owner_alert:${leads[0].id}:${t.toISOString()}:${to}`).sort(),
+    );
+    for (const j of alertJobs) {
+      const to = (j.payload as { to: string }).to;
+      assertEquals(j.payload, {
+        to,
+        template: "owner_alert",
+        language: "en",
+        params: ["Asha Rao", phone.e164, "3BHK", "2027-03"],
+        first_auto_reply: false,
+      });
+    }
+    const alertEnqueued = events.filter((e) => e.type === "owner_alert_retry_enqueued");
+    assertEquals(
+      alertEnqueued.map((e) => (e.payload as { job_id: string }).job_id).sort(),
+      alertJobs.map((j) => j.id).sort(),
+    );
   } finally {
     // Failed owner alerts have no lead_id and no provider id; remove them by recipient and time.
     for (const to of DEMO_OWNER_PHONES) {

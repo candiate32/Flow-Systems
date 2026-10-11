@@ -24,18 +24,31 @@ async function tickEveryMinute(deps: Omit<Deps, "now">, clock: { t: Date }, from
   }
 }
 
-/** Minutes after T0 of each call, per recipient. */
+type Sent = "enquiry_ack" | "owner_alert";
+
+/**
+ * Minutes after T0 of each provider call for one lead's message: its ack (sent
+ * to the lead) or its owner alert (sent to the owner, naming the lead's phone).
+ */
+function callsFor(provider: FlakyProvider, leadPhone: string, template: Sent) {
+  return provider.calls
+    .filter((c) => c.template === template && (template === "enquiry_ack" ? c.to : c.params[1]) === leadPhone)
+    .map((c) => ({ min: (c.at.getTime() - T0.getTime()) / MIN, ok: c.ok, call: c }));
+}
+
+/** Minutes after T0 of each ack call to one recipient. */
 function callMinutes(provider: FlakyProvider, to: string) {
   return provider.calls.filter((c) => c.to === to && c.template === "enquiry_ack")
     .map((c) => ({ min: (c.at.getTime() - T0.getTime()) / MIN, ok: c.ok }));
 }
 
-dbTest("failure drill: provider down for the first 18 calls, every ack sent exactly once with the right backoff", async () => {
+dbTest("failure drill: provider down for the first 27 calls, every ack and owner alert sent exactly once with the right backoff", async () => {
   await purgeTestJobs();
   const K = 4;
-  // Inline: K acks + K owner alerts fail. Runner: minute 1 and 2 fail all K,
-  // minute 7 fails 2 of them; those 2 succeed at minute 32.
-  const N = 2 * K + K + K + 2;
+  const JOBS = K * (1 + OWNER_PHONES); // one ack and one owner alert per enquiry
+  // Inline: all JOBS sends fail. Runner: minutes 1 and 2 fail all JOBS jobs,
+  // minute 7 fails 3 of them; those 3 succeed at minute 32.
+  const N = JOBS + JOBS + JOBS + 3;
   const clock = { t: T0 };
   const provider = new FlakyProvider(N, () => clock.t);
   const phones = Array.from({ length: K }, () => uniquePhone());
@@ -57,61 +70,81 @@ dbTest("failure drill: provider down for the first 18 calls, every ack sent exac
       assertEquals(body.ack_sent, false);
       leadIds.push(body.lead_id);
     }
-    assertEquals(provider.calls.length, 2 * K);
+    assertEquals(provider.calls.length, JOBS);
     assert(provider.calls.every((c) => !c.ok));
 
     const { data: jobs } = await db.from("jobs").select("*").in("lead_id", leadIds);
-    assertEquals(jobs!.length, K, "one retry job per enquiry");
+    assertEquals(jobs!.length, JOBS, "one retry job per failed ack and per failed owner alert");
     assert(jobs!.every((j) => j.status === "queued" && j.attempts === 0));
     assert(jobs!.every((j) => new Date(j.run_at).getTime() === T0.getTime() + MIN));
 
     // 2. Cron every minute for 3 hours, two overlapping runners each time.
     await tickEveryMinute({ db, provider, env: () => undefined }, clock, 0, 180);
 
-    // 3. Every lead got exactly one successful ack call, and the attempts were
-    //    spaced by the backoff schedule.
+    // 3. Every ack and every owner alert got exactly one successful call, and
+    //    the attempts were spaced by the backoff schedule.
     let runnerFailures = 0;
     const attemptCounts: number[] = [];
     for (const phone of phones) {
-      const calls = callMinutes(provider, phone.e164);
-      // Call 0 was the inline send at minute 0; the job's attempts follow.
-      assertEquals(calls[0], { min: 0, ok: false });
-      const attempts = calls.slice(1);
-      assertEquals(attempts.filter((c) => c.ok).length, 1, `${phone.e164} acked exactly once`);
-      assertEquals(attempts.at(-1)!.ok, true, "the last attempt is the success");
-      assertEquals(attempts[0].min, 1, "first retry one minute after the enquiry");
-      for (let i = 1; i < attempts.length; i++) {
-        assertEquals(attempts[i].min - attempts[i - 1].min, BACKOFF_MINUTES[i - 1], `gap before attempt ${i + 1}`);
+      for (const template of ["enquiry_ack", "owner_alert"] as const) {
+        const calls = callsFor(provider, phone.e164, template);
+        const what = `${template} for ${phone.e164}`;
+        // Call 0 was the inline send at minute 0; the job's attempts follow.
+        assertEquals(calls[0].min, 0, what);
+        assertEquals(calls[0].ok, false, what);
+        const attempts = calls.slice(1);
+        assertEquals(attempts.filter((c) => c.ok).length, 1, `${what} sent exactly once`);
+        assertEquals(attempts.at(-1)!.ok, true, `${what}: the last attempt is the success`);
+        assertEquals(attempts[0].min, 1, `${what}: first retry one minute after the enquiry`);
+        for (let i = 1; i < attempts.length; i++) {
+          assertEquals(attempts[i].min - attempts[i - 1].min, BACKOFF_MINUTES[i - 1], `${what}: gap before attempt ${i + 1}`);
+        }
+        runnerFailures += attempts.length - 1;
+        attemptCounts.push(attempts.length);
       }
-      runnerFailures += attempts.length - 1;
-      attemptCounts.push(attempts.length);
     }
-    assertEquals(runnerFailures, N - 2 * K, "every provider failure is accounted for");
-    assertEquals(attemptCounts.sort(), [3, 3, 4, 4]);
+    assertEquals(runnerFailures, N - JOBS, "every provider failure is accounted for");
+    assertEquals(attemptCounts.sort(), [3, 3, 3, 3, 3, 4, 4, 4]);
 
-    // 4. The database agrees: jobs done, one sent ack per lead, linked to its job.
+    // 4. The database agrees: jobs done, one message per job, linked to it.
     const { data: after } = await db.from("jobs").select("*").in("lead_id", leadIds);
+    assertEquals(after!.length, JOBS);
     for (const job of after!) {
       assertEquals(job.status, "done");
-      const phone = (job.payload as { to: string }).to;
-      const calls = callMinutes(provider, phone).slice(1);
+      const payload = job.payload as { to: string; template: Sent; params: string[] };
+      const leadPhone = payload.template === "enquiry_ack" ? payload.to : payload.params[1];
+      const calls = callsFor(provider, leadPhone, payload.template).slice(1);
       assertEquals(job.attempts, calls.length);
       assert(job.last_error?.includes(provider.marker), "last_error kept from the last failure");
 
-      const { data: sent } = await db.from("messages").select("*")
-        .eq("lead_id", job.lead_id!).eq("template_name", "enquiry_ack").eq("status", "sent");
-      assertEquals(sent!.length, 1, "exactly one sent ack");
-      assertEquals(sent![0].job_id, job.id);
-      const okCall = provider.calls.find((c) => c.to === phone && c.ok)!;
-      assertEquals(sent![0].provider_message_id, okCall.providerMessageId);
+      const { data: msgs } = await db.from("messages").select("*").eq("job_id", job.id);
+      assertEquals(msgs!.length, 1, "exactly one message for the job");
+      const msg = msgs![0];
+      assertEquals(msg.status, "sent");
+      assertEquals(msg.template_name, payload.template);
+      assertEquals(msg.to_phone, payload.to);
+      const okCall = calls.find((c) => c.ok)!.call;
+      assertEquals(msg.provider_message_id, okCall.providerMessageId);
 
-      const { data: lead } = await db.from("leads").select("first_auto_reply_at").eq("id", job.lead_id!).single();
-      assertEquals(new Date(lead!.first_auto_reply_at!).getTime(), okCall.at.getTime());
+      if (payload.template === "enquiry_ack") {
+        assertEquals(msg.lead_id, job.lead_id);
+        const { data: lead } = await db.from("leads").select("first_auto_reply_at").eq("id", job.lead_id!).single();
+        assertEquals(new Date(lead!.first_auto_reply_at!).getTime(), okCall.at.getTime());
+      } else {
+        assertEquals(msg.lead_id, null, "owner alerts have no lead_id");
+        assertEquals(payload.to, "+919000000001");
+      }
 
       const { data: events } = await db.from("events").select("type, payload").eq("payload->>job_id", job.id).order("id");
-      const retries = events!.filter((e) => e.type === "job_retry_scheduled");
-      assertEquals(retries.length, job.attempts - 1);
+      assertEquals(events!.filter((e) => e.type === "job_retry_scheduled").length, job.attempts - 1);
       assert(!events!.some((e) => e.type === "job_dead"));
+    }
+
+    // Per lead: one sent ack in total (inline ones all failed).
+    for (const leadId of leadIds) {
+      const { count } = await db.from("messages").select("id", { count: "exact", head: true })
+        .eq("lead_id", leadId).eq("template_name", "enquiry_ack").eq("status", "sent");
+      assertEquals(count, 1);
     }
 
     // 5. Nothing more happens later: no stray sends, nothing left in the queue.
@@ -121,9 +154,13 @@ dbTest("failure drill: provider down for the first 18 calls, every ack sent exac
     const { count: open } = await db.from("jobs").select("id", { count: "exact", head: true })
       .in("lead_id", leadIds).in("status", ["queued", "running", "dead"]);
     assertEquals(open, 0);
-    const owners = provider.calls.filter((c) => c.template === "owner_alert");
-    assertEquals(owners.length, K * OWNER_PHONES, "owner alerts were tried inline only");
+    const ownerOk = provider.calls.filter((c) => c.template === "owner_alert" && c.ok);
+    assertEquals(ownerOk.length, K * OWNER_PHONES, "each owner alert delivered once");
+    assertEquals(new Set(ownerOk.map((c) => c.params[1])).size, K);
   } finally {
+    // Sent owner-alert messages have no lead_id; remove them through their jobs first.
+    const { data: jobs } = await db.from("jobs").select("id").in("lead_id", leadIds);
+    await db.from("messages").delete().in("job_id", (jobs ?? []).map((j) => j.id));
     await cleanup({ leadIds, marker: provider.marker });
   }
 });
