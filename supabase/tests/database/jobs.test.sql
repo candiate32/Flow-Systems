@@ -9,7 +9,7 @@
 -- actual race, a claim held open in one connection while a second connection
 -- claims, is in supabase/functions/run-jobs/claim_test.ts.
 begin;
-select plan(48);
+select plan(49);
 
 -- Schema ----------------------------------------------------------------------
 select columns_are('public', 'jobs',
@@ -86,14 +86,19 @@ select lives_ok(
      values ('20000000-0000-4000-8000-000000000001', 'system', 'template.approved', 'enquiry_ack') $$,
   'audit_log accepts system as actor');
 
--- One sent message per job.
+-- One message per job, whatever its status (a delivered send still counts).
 insert into public.jobs (id, org_id, kind, idempotency_key)
 values ('20000000-0000-4000-8000-0000000000aa', '20000000-0000-4000-8000-000000000001', 'send_message', 'k-msg');
 select throws_ok(
   $$ insert into public.messages (org_id, direction, kind, provider, status, job_id)
-     values ('20000000-0000-4000-8000-000000000001', 'outbound', 'template', 'fake', 'sent', '20000000-0000-4000-8000-0000000000aa'),
+     values ('20000000-0000-4000-8000-000000000001', 'outbound', 'template', 'fake', 'delivered', '20000000-0000-4000-8000-0000000000aa'),
             ('20000000-0000-4000-8000-000000000001', 'outbound', 'template', 'fake', 'sent', '20000000-0000-4000-8000-0000000000aa') $$,
-  '23505', null, 'a job records at most one sent message');
+  '23505', null, 'a job records at most one message, in any status');
+select lives_ok(
+  $$ insert into public.messages (org_id, direction, kind, provider, status, job_id)
+     values ('20000000-0000-4000-8000-000000000001', 'outbound', 'template', 'fake', 'sent', null),
+            ('20000000-0000-4000-8000-000000000001', 'outbound', 'template', 'fake', 'sent', null) $$,
+  'messages without a job are not limited');
 
 -- updated_at is touched on update unless set explicitly.
 update public.jobs set updated_at = '2001-01-01T00:00:00Z' where idempotency_key = 'k-msg';
