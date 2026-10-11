@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
@@ -46,7 +46,8 @@ describe('/home', () => {
     for (const name of ['Site visit reminders', 'Old enquiry follow-up', 'Google review requests', 'Enquiry landing page']) {
       expect(screen.getByRole('heading', { level: 4, name })).toBeTruthy()
     }
-    expect(document.title).toBe('Flow Systems · Every enquiry answered in under a minute')
+    // The title is set in an effect, which can land just after the lazy page first paints.
+    await waitFor(() => expect(document.title).toBe('Flow Systems · Every enquiry answered in under a minute'))
   })
 
   it('keeps tech, provider and competitor names out of the copy', async () => {
