@@ -49,7 +49,8 @@ jobs:
         with:
           deno-version: v2.x
       - run: npm ci
-      - run: npx supabase start -x studio,imgproxy,logflare,vector
+      # No edge runtime here: `functions serve` below starts the only one, so requests never land mid-swap.
+      - run: npx supabase start -x studio,imgproxy,logflare,vector,edge-runtime
       - run: npx supabase test db
       - name: Edge Function tests against the local database
         run: |
@@ -58,7 +59,9 @@ jobs:
       - name: End to end through supabase functions serve
         run: |
           npx supabase functions serve > functions.log 2>&1 &
-          # Wait for the function itself, not the gateway: Kong answers OPTIONS before the worker exists.
+          for i in $(seq 1 180); do grep -q "Serving functions on" functions.log && break; sleep 1; done
+          grep -q "Serving functions on" functions.log || { echo "::error title=functions serve::never started"; exit 1; }
+          # Then wait for a 200 from the function itself (Kong answers OPTIONS on its own).
           # A full valid enquiry also warms the worker and its database client, so the timed request is warm.
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:54321/functions/v1/ingest-form \
