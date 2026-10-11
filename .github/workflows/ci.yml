@@ -58,14 +58,16 @@ jobs:
       - name: End to end through supabase functions serve
         run: |
           npx supabase functions serve > functions.log 2>&1 &
+          # Wait for the function itself, not the gateway: Kong answers OPTIONS before the worker exists.
+          # A full valid enquiry also warms the worker and its database client, so the timed request is warm.
           for i in $(seq 1 60); do
-            curl -sf -o /dev/null -X OPTIONS http://127.0.0.1:54321/functions/v1/ingest-form && break
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:54321/functions/v1/ingest-form \
+              -H 'content-type: application/json' \
+              -d '{"source_key":"demo-web-form","name":"Warm Up","phone":"9000000099","consent":true}' || true)
+            [ "$code" = 200 ] && break
             sleep 2
           done
-          # Warm the worker so the timed request doesn't include a cold boot.
-          # A full valid enquiry warms the database client too, not just the worker.
-          curl -s -o /dev/null -X POST http://127.0.0.1:54321/functions/v1/ingest-form -H 'content-type: application/json' \
-            -d '{"source_key":"demo-web-form","name":"Warm Up","phone":"9000000099","consent":true}' || true
+          [ "$code" = 200 ] || { echo "::error title=functions serve::ingest-form never returned 200 (last $code)"; exit 1; }
           scripts/e2e-ingest.sh
       - if: failure()
         name: Show function logs
