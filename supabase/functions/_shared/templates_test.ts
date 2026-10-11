@@ -1,6 +1,13 @@
 // deno-lint-ignore no-import-prefix -- test-only std dep; no shared deno.json by design
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { FOLLOW_UP_TEMPLATES, followUpTemplate, renderTemplate, TEMPLATE_TEXTS } from "./templates.ts";
+import {
+  FOLLOW_UP_TEMPLATES,
+  followUpTemplate,
+  INBOUND_ACK_TEXT,
+  renderInboundAck,
+  renderTemplate,
+  TEMPLATE_TEXTS,
+} from "./templates.ts";
 import { TEMPLATE_NAMES } from "./whatsapp.ts";
 
 Deno.test("followUpTemplate maps 1..3 to followup_1..3", () => {
@@ -35,4 +42,16 @@ Deno.test("renderTemplate does not expand placeholders inside params", () => {
     renderTemplate("followup_3", ["{{2}}", "Studio"]).startsWith("Hi {{2}}, a last note from Studio"),
     true,
   );
+});
+
+Deno.test("renderInboundAck fills the first name and studio, and says how to opt out", () => {
+  const text = renderInboundAck(["Ravi", "Lime & Lattice, Sarjapur Road"]);
+  assertEquals(
+    text,
+    "Hi Ravi, thanks for messaging Lime & Lattice, Sarjapur Road. Our designer will reply to you here shortly. " +
+      "Reply STOP to opt out.",
+  );
+  const used = [...new Set([...INBOUND_ACK_TEXT.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])))].sort();
+  assertEquals(used, [1, 2]);
+  assertThrows(() => renderInboundAck(["Ravi"]), RangeError);
 });
