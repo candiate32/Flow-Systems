@@ -26,7 +26,10 @@ type Props = {
   config: FormConfig
   /** Renders and validates fully but never submits; says so on the form. */
   preview?: boolean
-  /** Fill the viewport (a page of its own) rather than sit inside another page. */
+  /**
+   * The form is the page's main content: headings start at h1 and the root
+   * grows to fill a flex-column parent (FormPage, Showcase).
+   */
   fullPage?: boolean
 }
 
@@ -183,7 +186,7 @@ export function FormRenderer({ config, preview = false, fullPage = false }: Prop
       style={themeStyle(theme)}
       data-ff-preset={config.theme.preset}
       data-ff-layout={config.layout}
-      className={`@container bg-[var(--ff-bg)] font-[family-name:var(--ff-font-body)] text-[var(--ff-text)] antialiased ${fullPage ? 'min-h-dvh' : ''}`}
+      className={`@container bg-[var(--ff-bg)] font-[family-name:var(--ff-font-body)] text-[var(--ff-text)] antialiased ${fullPage ? 'flex-1' : ''}`}
     >
       <FormLayout config={config} privacy={privacy} nested={!fullPage}>
         {success ? (

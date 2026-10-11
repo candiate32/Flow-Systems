@@ -1,12 +1,12 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router'
 import { FormRenderer } from '../forms/components/FormRenderer'
-import { getFormConfig, HOME_FORM_SLUG } from '../forms/configs'
+import { getFormConfig } from '../forms/configs'
 import NotFound from './NotFound'
 
-/** `/` (the demo studio) and `/f/:slug` (any registered studio form). */
+/** `/f/:slug`: one registered studio form on a page of its own, as a client's link would show it. */
 export default function FormPage() {
-  const { slug = HOME_FORM_SLUG } = useParams()
+  const { slug = '' } = useParams()
   const config = getFormConfig(slug)
 
   useEffect(() => {
@@ -14,5 +14,9 @@ export default function FormPage() {
   }, [config])
 
   if (!config) return <NotFound />
-  return <FormRenderer key={config.slug} config={config} fullPage />
+  return (
+    <div className="flex min-h-dvh flex-col">
+      <FormRenderer key={config.slug} config={config} fullPage />
+    </div>
+  )
 }

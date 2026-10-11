@@ -1,5 +1,7 @@
 # 003: Polished, modular enquiry forms
 
+> Updated by [005](005-form-showcase.md): `/` is now a showcase of every form (Nila first), `/forms` redirects there, Demo Interiors is now Lime & Lattice, and all presets share Nila's type and shape.
+
 Every studio we sign gets its own enquiry form. It should look like the studio's own brand rather than a Flow Systems template, and setting one up should take a config file, not new code. Prajin also needs a way to show a prospect "this is what your form would look like" in a meeting.
 
 ## The bar (what the reviewer grades against)

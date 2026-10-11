@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+/* The showcase fades each form in as you switch to it (motion-safe only). */
+@keyframes ff-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}

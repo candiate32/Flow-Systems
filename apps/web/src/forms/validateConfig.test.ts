@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { FORM_CONFIGS, getFormConfig, HOME_FORM_SLUG } from './configs'
-import { demoInteriors } from './configs/demo-interiors'
-import { THEME_PRESETS, THEMES } from './themes'
+import { limeAndLattice } from './configs/lime-and-lattice'
+import { SHARED_TYPE, THEME_PRESETS, THEMES } from './themes'
 import type { FormConfig } from './types'
 import { contrastErrors, contrastRatio, validateFormConfig } from './validateConfig'
 
 function withChanges(change: (c: FormConfig) => void): FormConfig {
-  const copy = structuredClone(demoInteriors)
+  const copy = structuredClone(limeAndLattice)
   change(copy)
   return copy
 }
@@ -22,24 +22,37 @@ describe('registered configs', () => {
     expect(validateFormConfig(config).errors).toEqual([])
   })
 
-  it('have unique slugs and include the home form', () => {
+  it('have unique slugs and start with Nila, the home form', () => {
     const slugs = FORM_CONFIGS.map((c) => c.slug)
     expect(new Set(slugs).size).toBe(slugs.length)
-    expect(getFormConfig(HOME_FORM_SLUG)?.studio.name).toBe('Demo Interiors')
+    expect(FORM_CONFIGS[0].slug).toBe(HOME_FORM_SLUG)
+    expect(getFormConfig(HOME_FORM_SLUG)?.studio.name).toBe('Nila Design House')
     expect(getFormConfig(HOME_FORM_SLUG)?.sourceKey).toBe('demo-web-form')
   })
 
-  it('cover all three presets and all three layouts, and every demo studio is labelled', () => {
+  it('cover all three presets and all three layouts, and every sample studio is labelled', () => {
     expect(new Set(FORM_CONFIGS.map((c) => c.theme.preset))).toEqual(new Set(['atelier', 'terrazzo', 'teak']))
     expect(new Set(FORM_CONFIGS.map((c) => c.layout))).toEqual(new Set(['card', 'split', 'minimal']))
-    for (const c of FORM_CONFIGS) expect(c.studio.isDemo).toBe(true)
-    for (const c of FORM_CONFIGS.filter((c) => c.slug !== HOME_FORM_SLUG)) {
+    for (const c of FORM_CONFIGS) {
+      expect(c.studio.isDemo).toBe(true)
       expect(c.fields.some((f) => 'key' in f)).toBe(true)
+    }
+  })
+
+  it('never put "demo" in a studio name or slug', () => {
+    for (const c of FORM_CONFIGS) {
+      expect(c.studio.name).not.toMatch(/demo/i)
+      expect(c.studio.logoText ?? '').not.toMatch(/demo/i)
+      expect(c.slug).not.toMatch(/demo/i)
     }
   })
 })
 
 describe('theme presets', () => {
+  it.each(THEME_PRESETS)("%s uses Nila's type and shape", (preset) => {
+    expect(THEMES[preset]).toMatchObject(SHARED_TYPE)
+  })
+
   it.each(THEME_PRESETS)('%s passes every contrast check', (preset) => {
     expect(contrastErrors(THEMES[preset])).toEqual([])
     expect(contrastRatio(THEMES[preset].text, THEMES[preset].bg)).toBeGreaterThanOrEqual(4.5)
@@ -81,6 +94,7 @@ describe('validateFormConfig rejects', () => {
 
   it('more than 6 custom fields', () => {
     const errors = errorsFor((c) => {
+      c.fields = c.fields.filter((f) => !('key' in f))
       for (let i = 0; i < 7; i++) c.fields.push({ kind: 'text', key: `q${i}`, label: `Q${i}` })
     })
     expect(errors).toContainEqual(expect.stringMatching(/at most 6 custom questions, found 7/))
@@ -154,6 +168,6 @@ describe('validateFormConfig rejects', () => {
   })
 
   it('prefixes every message with the slug', () => {
-    for (const e of errorsFor((c) => (c.studio.whatsappFallback = 'x'))) expect(e.startsWith('demo-interiors: ')).toBe(true)
+    for (const e of errorsFor((c) => (c.studio.whatsappFallback = 'x'))) expect(e.startsWith('lime-and-lattice: ')).toBe(true)
   })
 })
