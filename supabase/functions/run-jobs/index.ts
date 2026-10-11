@@ -15,7 +15,7 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must } from "../_shared/db.ts";
 import { json } from "../_shared/http.ts";
 import { type Job, type JobKind, nextRunAt, opsAlertParams, PermanentJobError } from "../_shared/jobs.ts";
-import { normalizeIndianMobile } from "../_shared/phone.ts";
+import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import { getWhatsAppProvider, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { defaultHandlers, type JobContext, type JobHandler, type JobOutcome } from "./handlers.ts";
 
@@ -178,25 +178,8 @@ async function deadLetter(job: Job, deps: Deps, error: string): Promise<"dead" |
  * died, and the alert must not keep the job from being dead-lettered).
  */
 async function alertOps(job: Job, deps: Deps, error: string): Promise<void> {
-  const raw = deps.env("OPS_ALERT_PHONE");
-  const to = raw ? normalizeIndianMobile(raw) : null;
-  if (!to) {
-    await addEvent(deps, job, "ops_alert_skipped", {
-      reason: raw ? "OPS_ALERT_PHONE is not a valid mobile number" : "OPS_ALERT_PHONE is not set",
-    });
-    return;
-  }
-  try {
-    const { providerMessageId } = await deps.provider.sendTemplate({
-      to,
-      template: "ops_alert",
-      language: "en",
-      params: opsAlertParams(job, error),
-    });
-    await addEvent(deps, job, "ops_alert_sent", { provider_message_id: providerMessageId });
-  } catch (err) {
-    await addEvent(deps, job, "ops_alert_failed", { error: errorMessage(err) });
-  }
+  const event = await sendOpsAlert(deps.provider, deps.env, opsAlertParams(job, error));
+  await addEvent(deps, job, event.type, event.payload);
 }
 
 /** Writes an event for the job's org and lead. Logs instead of throwing. */

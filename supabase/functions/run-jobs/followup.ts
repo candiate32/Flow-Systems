@@ -4,16 +4,49 @@
 // - it is final if an earlier attempt already sent it (exactly once);
 // - it is cancelled if the lead opted out, has no consent, or the lead or a
 //   staff member replied after the enquiry (decideFollowUp in _shared);
+// - it is cancelled if a later follow-up of the same set is already due (a
+//   backlog after downtime sends only the latest, not all three at once);
 // - in quiet hours (21:00-09:00 IST) it goes back to the queue for 09:00 IST;
 // - otherwise it sends `followup_<n>`: the template outside the lead's 24-hour
 //   window, a session message with the same text inside it.
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
-import { decideFollowUp, parseFollowUpPayload } from "../_shared/followups.ts";
+import {
+  decideFollowUp,
+  followUpIdempotencyKey,
+  type FollowUpNumber,
+  parseFollowUpPayload,
+} from "../_shared/followups.ts";
 import { PermanentJobError } from "../_shared/jobs.ts";
 import { followUpTemplate, renderTemplate } from "../_shared/templates.ts";
-import type { JobHandler } from "./handlers.ts";
+import type { JobContext, JobHandler } from "./handlers.ts";
 
 const TEMPLATE_LANGUAGE = "en";
+
+/**
+ * True when a later follow-up of the same set (same lead and enquiry, higher
+ * n) is due by `now` and has not been cancelled or dead-lettered: queued and
+ * due, already running, or done.
+ */
+async function laterFollowUpDue(
+  db: JobContext["db"],
+  leadId: string,
+  n: FollowUpNumber,
+  enquiryAt: Date,
+  now: Date,
+): Promise<boolean> {
+  const later = ([1, 2, 3] as const).filter((m) => m > n);
+  if (!later.length) return false;
+  const rows = must(
+    await db.from("jobs")
+      .select("id")
+      .in("idempotency_key", later.map((m) => followUpIdempotencyKey(leadId, m, enquiryAt)))
+      .in("status", ["queued", "running", "done"])
+      .lte("run_at", now.toISOString())
+      .limit(1),
+    "find later follow-ups",
+  );
+  return (rows?.length ?? 0) > 0;
+}
 
 export const followUp: JobHandler = async (job, ctx) => {
   const { db, provider, now } = ctx;
@@ -40,6 +73,13 @@ export const followUp: JobHandler = async (job, ctx) => {
 
   const decision = decideFollowUp(lead, p.enquiryAt, now());
   if (decision.action === "cancel") return { status: "cancelled", reason: decision.reason };
+
+  // Backlog (runner down, long deferral): if a later follow-up of the same
+  // set is already due, only the latest one goes out.
+  if (await laterFollowUpDue(db, job.lead_id, p.n, p.enquiryAt, now())) {
+    return { status: "cancelled", reason: "superseded by a later follow-up" };
+  }
+
   if (decision.action === "defer") return { status: "deferred", runAt: decision.runAt, reason: "quiet hours" };
 
   const org = Array.isArray(lead.org) ? lead.org[0] : lead.org;

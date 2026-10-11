@@ -126,4 +126,4 @@ Max 3 review rounds per slice. Behaviour, the items above, security (secrets, RL
 - **Scheduler.** `pg_cron` + `pg_net` calling `run-jobs`, rather than Supabase Queues/pgmq. A plain table is easier to inspect, test and dead-letter.
 - **Ops alerts.** Ops alerts go to `OPS_ALERT_PHONE` (Mourya) as an `ops_alert` template, and are also recorded as `events`. Email ops alerts wait for Resend.
 - **Follow-up timing.** Follow-up send time is 11:00 IST, as in the demo slice. No sends between 21:00 and 09:00 IST: a job due in that window moves to 09:00.
-- **Opt-out.** Opt-out keywords are `STOP` and `UNSUBSCRIBE`.
+- **Opt-out.** Opt-out keywords are `STOP` and `UNSUBSCRIBE`. An opt-out holds against everything the engine sends on its own: follow-ups, retries and any other queued message. Only a fresh form submission with the consent box ticked (a new enquiry, not a duplicate within 24 hours) counts as opting back in. It clears `opted_out_at` and logs `lead_opted_in` with `previous_opted_out_at`, and then the acknowledgement and follow-ups run as usual.
