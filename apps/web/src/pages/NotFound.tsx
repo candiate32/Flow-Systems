@@ -18,7 +18,7 @@ export default function NotFound() {
           to="/"
           className="mt-8 inline-flex min-h-12 items-center justify-center rounded-lg bg-stone-900 px-5 font-semibold text-white hover:bg-stone-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-900"
         >
-          See the demo studio's form
+          See our sample forms
         </Link>
       </main>
     </div>

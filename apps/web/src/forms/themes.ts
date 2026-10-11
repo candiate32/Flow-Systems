@@ -30,7 +30,7 @@ export type ThemeTokens = {
   fontBody: string
   displayWeight: number
   displayTracking: string
-  /** Multiplier for headline size; serif display faces run small. */
+  /** Multiplier for headline size, for display faces that run small. */
   displayScale: number
   /** Google Fonts stylesheet, injected only when a form with this preset mounts. */
   fontHref: string
@@ -41,11 +41,28 @@ export type ThemeTokens = {
   colorScheme: 'light' | 'dark'
 }
 
+/**
+ * Type and shape taken from Nila (terrazzo), shared by every preset so all
+ * studio forms speak one design language. Presets differ in colour and
+ * material; a preset may still override any of these.
+ */
+export const SHARED_TYPE = {
+  radius: '14px',
+  fontDisplay: "'Bricolage Grotesque', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
+  fontBody: "'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
+  displayWeight: 700,
+  displayTracking: '-0.03em',
+  displayScale: 1,
+  fontHref:
+    'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=DM+Sans:opsz,wght@9..40,400..700&display=swap',
+} satisfies Partial<ThemeTokens>
+
 export const THEMES: Record<ThemePreset, ThemeTokens> = {
-  // Lime plaster, terracotta and an editorial serif: calm, gallery-like studios.
+  // Lime plaster and terracotta: calm, gallery-like studios.
   atelier: {
+    ...SHARED_TYPE,
     label: 'Atelier',
-    description: 'Lime plaster, terracotta and a classic serif',
+    description: 'Lime plaster and terracotta',
     bg: '#F3EDE4',
     surface: '#FFFCF7',
     field: '#FFFFFF',
@@ -56,25 +73,18 @@ export const THEMES: Record<ThemePreset, ThemeTokens> = {
     accent: '#9A4A2B',
     accentText: '#FFF8F1',
     error: '#A3261B',
-    radius: '4px',
     hero: 'accent',
-    fontDisplay: "'Cormorant Garamond', 'Iowan Old Style', Georgia, 'Times New Roman', serif",
-    fontBody: "'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
-    displayWeight: 600,
-    displayTracking: '-0.01em',
-    displayScale: 1.15,
-    fontHref:
-      'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap',
     // Fluted plaster: fine vertical reeding.
     pattern:
       'repeating-linear-gradient(90deg, rgb(255 248 241 / 0.09) 0 1px, transparent 1px 22px), radial-gradient(120% 90% at 85% 0%, rgb(255 248 241 / 0.12), transparent 60%)',
     patternSize: 'auto',
     colorScheme: 'light',
   },
-  // Speckled terrazzo floor, deep verdigris green and a characterful grotesk.
+  // Speckled terrazzo floor and deep verdigris green.
   terrazzo: {
+    ...SHARED_TYPE,
     label: 'Terrazzo',
-    description: 'Speckled terrazzo, verdigris green and a modern grotesk',
+    description: 'Speckled terrazzo and verdigris green',
     bg: '#EFEDE6',
     surface: '#FBFAF6',
     field: '#FFFFFF',
@@ -85,15 +95,7 @@ export const THEMES: Record<ThemePreset, ThemeTokens> = {
     accent: '#1F5A50',
     accentText: '#F3F7F2',
     error: '#B42318',
-    radius: '14px',
     hero: 'accent',
-    fontDisplay: "'Bricolage Grotesque', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
-    fontBody: "'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
-    displayWeight: 700,
-    displayTracking: '-0.03em',
-    displayScale: 1,
-    fontHref:
-      'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=DM+Sans:opsz,wght@9..40,400..700&display=swap',
     // Marble chips scattered on the green.
     pattern: [
       'radial-gradient(circle at 12% 18%, #E8A58F 0 3px, transparent 3.5px)',
@@ -108,10 +110,11 @@ export const THEMES: Record<ThemePreset, ThemeTokens> = {
     patternSize: '131px 131px, 97px 97px, 151px 151px, 113px 113px, 89px 89px, 127px 127px, 173px 173px',
     colorScheme: 'light',
   },
-  // Dark teak, brass hardware and a warm soft serif: premium, after-dark.
+  // Dark teak and brass hardware: premium, after-dark.
   teak: {
+    ...SHARED_TYPE,
     label: 'Teak',
-    description: 'Dark teak, brass and a warm soft serif',
+    description: 'Dark teak and brass',
     bg: '#1B1511',
     surface: '#261D17',
     field: '#1F1813',
@@ -122,15 +125,7 @@ export const THEMES: Record<ThemePreset, ThemeTokens> = {
     accent: '#D4A056',
     accentText: '#1B1511',
     error: '#FF9B85',
-    radius: '6px',
     hero: 'surface',
-    fontDisplay: "'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif",
-    fontBody: "'Figtree', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
-    displayWeight: 500,
-    displayTracking: '-0.02em',
-    displayScale: 1.05,
-    fontHref:
-      'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Figtree:wght@400;500;600;700&display=swap',
     // Quarter-sawn grain with a brass glow.
     pattern:
       'repeating-linear-gradient(97deg, rgb(212 160 86 / 0.05) 0 2px, transparent 2px 11px), repeating-linear-gradient(93deg, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 31px), radial-gradient(90% 70% at 100% 0%, rgb(212 160 86 / 0.16), transparent 65%)',

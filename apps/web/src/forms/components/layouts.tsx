@@ -60,7 +60,7 @@ function CardLayout({ config, children, privacy, nested }: LayoutProps) {
   return (
     <>
       <section className={`bg-[var(--ff-hero-bg)] text-[var(--ff-hero-text)] ${heroPattern}`}>
-        <div className="mx-auto max-w-xl px-4 pt-5 pb-28 @2xl:px-6 @2xl:pt-7 @2xl:pb-32">
+        <div className="mx-auto max-w-xl px-4 pt-6 pb-28 @2xl:px-6 @2xl:pt-10 @2xl:pb-32">
           <StudioBar config={config} />
           <p className="mt-10 text-xs font-semibold tracking-[0.16em] text-[var(--ff-hero-muted)] uppercase @2xl:mt-14">
             {config.studio.area}, Bangalore
@@ -71,7 +71,7 @@ function CardLayout({ config, children, privacy, nested }: LayoutProps) {
           <p className="mt-4 max-w-lg text-base leading-relaxed text-pretty text-[var(--ff-hero-muted)] @2xl:text-lg">{config.copy.intro}</p>
         </div>
       </section>
-      <div className="relative mx-auto -mt-20 max-w-xl px-4 pb-12 @2xl:px-6">
+      <div className="relative mx-auto -mt-20 max-w-xl px-4 pb-12 @2xl:px-6 @2xl:pb-16">
         <div className="rounded-[calc(var(--ff-radius)*1.5)] border border-[var(--ff-border)] bg-[var(--ff-surface)] p-5 shadow-[0_30px_60px_-35px_rgb(0_0_0/0.45)] @md:p-8">
           {children}
         </div>
@@ -87,42 +87,46 @@ const PROMISES = [
   'Your details are stored in India',
 ]
 
-/** Copy on the left, form on the right when there is room; stacked on phones. */
+/**
+ * Copy on the left, form on the right when there is room; stacked, at the
+ * card layout's width, below that. The studio bar spans both columns, and the
+ * copy column stays in view while the longer form scrolls past it.
+ */
 function SplitLayout({ config, children, privacy, nested }: LayoutProps) {
   const H = nested ? 'h2' : 'h1'
   return (
-    <div className="mx-auto grid max-w-6xl gap-8 px-4 py-6 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,29rem)] @4xl:gap-16 @4xl:px-8 @4xl:py-12">
-      <div className="flex flex-col">
-        <StudioBar config={config} />
-        <p className="mt-8 text-xs font-semibold tracking-[0.16em] text-[var(--ff-muted)] uppercase @4xl:mt-16">
-          {config.studio.area}, Bangalore
-        </p>
-        <H className={`${displayClass} mt-3 text-[calc(2.25rem*var(--ff-display-scale))] leading-[1.02] text-balance @4xl:text-[calc(3.5rem*var(--ff-display-scale))]`}>
-          {config.copy.headline}
-        </H>
-        <p className="mt-4 max-w-md text-base leading-relaxed text-pretty text-[var(--ff-muted)] @4xl:text-lg">{config.copy.intro}</p>
-        <ul className="mt-8 hidden space-y-3 @4xl:block">
-          {PROMISES.map((p) => (
-            <li key={p} className="flex items-center gap-3">
-              <span aria-hidden="true" className="flex size-6 items-center justify-center rounded-full bg-[var(--ff-accent)] text-[var(--ff-accent-text)]">
-                <svg viewBox="0 0 16 16" className="size-3.5 fill-none stroke-current stroke-2">
-                  <path d="m3.5 8.5 3 3 6-7" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </span>
-              {p}
-            </li>
-          ))}
-        </ul>
-        <div
-          aria-hidden="true"
-          className={`mt-10 hidden h-44 rounded-[calc(var(--ff-radius)*1.5)] bg-[var(--ff-hero-bg)] @4xl:block ${heroPattern}`}
-        />
-      </div>
-      <div>
-        <div className="rounded-[calc(var(--ff-radius)*1.5)] border border-[var(--ff-border)] bg-[var(--ff-surface)] p-5 shadow-[0_30px_60px_-40px_rgb(0_0_0/0.4)] @md:p-8">
-          {children}
+    <div className="mx-auto max-w-xl px-4 pt-6 pb-12 @2xl:px-6 @4xl:max-w-6xl @4xl:px-8 @4xl:pt-10 @4xl:pb-16">
+      <StudioBar config={config} />
+      <div className="mt-10 grid gap-8 @4xl:mt-12 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,29rem)] @4xl:gap-16">
+        <div className="@4xl:sticky @4xl:top-10 @4xl:self-start @4xl:pt-8">
+          <p className="text-xs font-semibold tracking-[0.16em] text-[var(--ff-muted)] uppercase">{config.studio.area}, Bangalore</p>
+          <H className={`${displayClass} mt-3 text-[calc(2.25rem*var(--ff-display-scale))] leading-[1.02] text-balance @4xl:text-[calc(3.5rem*var(--ff-display-scale))]`}>
+            {config.copy.headline}
+          </H>
+          <p className="mt-4 max-w-md text-base leading-relaxed text-pretty text-[var(--ff-muted)] @4xl:text-lg">{config.copy.intro}</p>
+          <ul className="mt-8 hidden space-y-3 @4xl:block">
+            {PROMISES.map((p) => (
+              <li key={p} className="flex items-center gap-3">
+                <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--ff-accent)] text-[var(--ff-accent-text)]">
+                  <svg viewBox="0 0 16 16" className="size-3.5 fill-none stroke-current stroke-2">
+                    <path d="m3.5 8.5 3 3 6-7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                {p}
+              </li>
+            ))}
+          </ul>
+          <div
+            aria-hidden="true"
+            className={`mt-10 hidden h-40 rounded-[calc(var(--ff-radius)*1.5)] bg-[var(--ff-hero-bg)] @4xl:block ${heroPattern}`}
+          />
         </div>
-        <Footer config={config} privacy={privacy} nested={nested} />
+        <div>
+          <div className="rounded-[calc(var(--ff-radius)*1.5)] border border-[var(--ff-border)] bg-[var(--ff-surface)] p-5 shadow-[0_30px_60px_-40px_rgb(0_0_0/0.4)] @md:p-8">
+            {children}
+          </div>
+          <Footer config={config} privacy={privacy} nested={nested} />
+        </div>
       </div>
     </div>
   )
@@ -132,13 +136,13 @@ function SplitLayout({ config, children, privacy, nested }: LayoutProps) {
 function MinimalLayout({ config, children, privacy, nested }: LayoutProps) {
   const H = nested ? 'h2' : 'h1'
   return (
-    <div className="mx-auto max-w-lg px-4 py-6 @lg:py-10">
+    <div className="mx-auto max-w-lg px-4 pt-6 pb-12 @lg:pt-10 @lg:pb-16">
       <StudioBar config={config} />
       <div className="mt-6 h-px bg-[var(--ff-border)]" />
       <H className={`${displayClass} mt-6 text-[calc(1.875rem*var(--ff-display-scale))] leading-tight text-balance`}>
         {config.copy.headline}
       </H>
-      <p className="mt-3 leading-relaxed text-[var(--ff-muted)]">{config.copy.intro}</p>
+      <p className="mt-4 leading-relaxed text-pretty text-[var(--ff-muted)]">{config.copy.intro}</p>
       <div className="mt-8">{children}</div>
       <Footer config={config} privacy={privacy} nested={nested} />
     </div>

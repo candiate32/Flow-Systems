@@ -1,11 +1,11 @@
 import type { FormConfig } from '../types'
 
-/** The spec 002 demo studio, served at `/`. Core fields only. */
-export const demoInteriors: FormConfig = {
-  slug: 'demo-interiors',
+/** Fictional sample studio: lime plaster and terracotta, card layout. */
+export const limeAndLattice: FormConfig = {
+  slug: 'lime-and-lattice',
   sourceKey: 'demo-web-form',
   studio: {
-    name: 'Demo Interiors',
+    name: 'Lime & Lattice',
     area: 'Sarjapur Road',
     whatsappFallback: '+91 90000 00001',
     isDemo: true,
@@ -21,6 +21,12 @@ export const demoInteriors: FormConfig = {
     { kind: 'name' },
     { kind: 'phone' },
     { kind: 'bhk' },
+    {
+      kind: 'chips',
+      key: 'style',
+      label: 'Which style are you drawn to?',
+      options: ['Warm minimal', 'Contemporary', 'Classic Indian', 'Not sure yet'],
+    },
     { kind: 'possession_month' },
   ],
 }

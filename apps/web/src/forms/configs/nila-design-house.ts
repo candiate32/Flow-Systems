@@ -1,6 +1,6 @@
 import type { FormConfig } from '../types'
 
-/** Fictional demo studio: contemporary, terrazzo palette, split layout. */
+/** Fictional sample studio: terrazzo palette, split layout. The default form at `/`. */
 export const nilaDesignHouse: FormConfig = {
   slug: 'nila-design-house',
   sourceKey: 'demo-web-form',

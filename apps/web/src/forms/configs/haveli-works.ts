@@ -1,6 +1,6 @@
 import type { FormConfig } from '../types'
 
-/** Fictional demo studio: premium, dark teak palette, minimal (embeddable) layout. */
+/** Fictional sample studio: premium, dark teak palette, minimal (embeddable) layout. */
 export const haveliWorks: FormConfig = {
   slug: 'haveli-works',
   sourceKey: 'demo-web-form',
