@@ -21,6 +21,12 @@ Deno.test("isInsideServiceWindow is false at exactly 24 h and after", () => {
   assertEquals(isInsideServiceWindow(new Date(now.getTime() - 72 * H), now), false);
 });
 
+Deno.test("isInsideServiceWindow at 23:59 since the lead's message is inside, at 24:01 outside (spec 004, B.2)", () => {
+  const M = 60_000;
+  assertEquals(isInsideServiceWindow(new Date(now.getTime() - (23 * H + 59 * M)), now), true);
+  assertEquals(isInsideServiceWindow(new Date(now.getTime() - (24 * H + 1 * M)), now), false);
+});
+
 Deno.test("isInsideServiceWindow treats a slightly future inbound (clock skew) as inside", () => {
   assertEquals(isInsideServiceWindow(new Date(now.getTime() + 1000), now), true);
 });
