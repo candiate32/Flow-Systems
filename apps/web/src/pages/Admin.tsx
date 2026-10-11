@@ -1,3 +1,4 @@
+import { adminUrl } from '../lib/config'
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { getSupabase } from '../lib/supabase'
@@ -23,7 +24,7 @@ function SignIn() {
     setError(null)
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/admin` },
+      options: { shouldCreateUser: false, emailRedirectTo: adminUrl() },
     })
     setBusy(false)
     if (error) setError(error.message)

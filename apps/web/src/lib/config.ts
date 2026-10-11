@@ -26,3 +26,13 @@ export function whatsappFallbackUrl(): string {
   const digits = (read('VITE_WHATSAPP_FALLBACK_PHONE') || '919000000001').replace(/\D/g, '')
   return `https://wa.me/${digits}`
 }
+
+// Static hosts without SPA rewrites (GitHub Pages previews) use hash routes: /#/admin.
+export function hashRouting(): boolean {
+  return read('VITE_HASH_ROUTER') === 'true'
+}
+
+export function adminUrl(): string {
+  const { origin, pathname } = window.location
+  return hashRouting() ? `${origin}${pathname}#/admin` : `${origin}/admin`
+}
