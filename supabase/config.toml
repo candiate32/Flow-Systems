@@ -447,3 +447,14 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/run-jobs/deno.json"
 entrypoint = "./functions/run-jobs/index.ts"
+
+# WhatsApp provider webhooks: inbound messages, staff echoes, delivery
+# receipts (spec 004, C). No JWT: the provider can't send one. Every request
+# must carry the provider's signature (the fake: x-fake-signature, HMAC-SHA256
+# of the body keyed by WHATSAPP_WEBHOOK_SECRET) and gets 401 without it.
+# Each studio's number posts to ...?source=<its whatsapp_inbound public_key>.
+[functions.whatsapp-webhook]
+enabled = true
+verify_jwt = false
+import_map = "./functions/whatsapp-webhook/deno.json"
+entrypoint = "./functions/whatsapp-webhook/index.ts"
