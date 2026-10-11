@@ -98,7 +98,7 @@ function SplitLayout({ config, children, privacy, nested }: LayoutProps) {
     <div className="mx-auto max-w-xl px-4 pt-6 pb-12 @2xl:px-6 @4xl:max-w-6xl @4xl:px-8 @4xl:pt-10 @4xl:pb-16">
       <StudioBar config={config} />
       <div className="mt-10 grid gap-8 @4xl:mt-12 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,29rem)] @4xl:gap-16">
-        <div className="@4xl:sticky @4xl:top-10 @4xl:self-start @4xl:pt-8">
+        <div className="@4xl:sticky @4xl:top-[var(--ff-sticky-top,2.5rem)] @4xl:self-start @4xl:pt-8">
           <p className="text-xs font-semibold tracking-[0.16em] text-[var(--ff-muted)] uppercase">{config.studio.area}, Bangalore</p>
           <H className={`${displayClass} mt-3 text-[calc(2.25rem*var(--ff-display-scale))] leading-[1.02] text-balance @4xl:text-[calc(3.5rem*var(--ff-display-scale))]`}>
             {config.copy.headline}

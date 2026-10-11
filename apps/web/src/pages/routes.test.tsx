@@ -113,12 +113,19 @@ describe('/ showcase', () => {
     expect(showcaseForm('Haveli Works')).toBeTruthy()
   })
 
-  it('starts each form empty after a switch', () => {
+  it('keeps what was typed in each form across switches', () => {
     renderAt('/')
     fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Asha' } })
     fireEvent.click(screen.getByRole('link', { name: 'Next form: Lime & Lattice' }))
+    expect((within(showcaseForm('Lime & Lattice')).getByLabelText('Name') as HTMLInputElement).value).toBe('')
+    expect(screen.getAllByRole('form')).toHaveLength(1)
     fireEvent.click(screen.getByRole('link', { name: 'Previous form: Nila Design House' }))
-    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Asha')
+  })
+
+  it('links the wordmark to the home page', () => {
+    renderAt('/')
+    expect(screen.getByRole('link', { name: 'Flow Systems: what we do' }).getAttribute('href')).toBe('/home')
   })
 
   it('submits for real, with the source key and custom answers', async () => {
