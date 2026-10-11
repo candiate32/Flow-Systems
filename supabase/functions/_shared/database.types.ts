@@ -229,17 +229,23 @@ isOneToOne: false
                   ]
                 },"webhook_events": {
                   Row: {
-                    "id": number,"payload": NonNullable<Json>,"processed_at": string | null,"provider": string,"provider_event_id": string,"received_at": string
+                    "attempts": number,"id": number,"kind": string | null,"lead_id": string | null,"org_id": string | null,"payload": NonNullable<Json>,"processed_at": string | null,"processing_error": string | null,"provider": string,"provider_event_id": string,"received_at": string,"result": Json | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "id"?: never,"payload": NonNullable<Json>,"processed_at"?: string | null,"provider": string,"provider_event_id": string,"received_at"?: string
+                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload": NonNullable<Json>,"processed_at"?: string | null,"processing_error"?: string | null,"provider": string,"provider_event_id": string,"received_at"?: string,"result"?: Json | null
                   }
                   Update: {
-                    "id"?: never,"payload"?: NonNullable<Json>,"processed_at"?: string | null,"provider"?: string,"provider_event_id"?: string,"received_at"?: string
+                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload"?: NonNullable<Json>,"processed_at"?: string | null,"processing_error"?: string | null,"provider"?: string,"provider_event_id"?: string,"received_at"?: string,"result"?: Json | null
                   }
                   Relationships: [
-                    
+                    {
+      foreignKeyName: "webhook_events_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
                   ]
                 }
           }
@@ -272,6 +278,9 @@ isOneToOne: false
         isOneToOne: false
         isSetofReturn: true
       } },
+"process_whatsapp_event":
+{ Args: { "p_as_of"?: string,"p_event": Json,"p_source_id": string,"p_webhook_event_id": number }; Returns: Json
+                           },
 "record_opt_out":
 { Args: { "p_at"?: string,"p_lead_id": string }; Returns: (string)[]
                            },

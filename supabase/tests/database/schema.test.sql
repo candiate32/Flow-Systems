@@ -20,7 +20,8 @@ select columns_are('public', 'messages',
         'provider_message_id', 'status', 'error', 'created_at', 'sent_at', 'job_id']);
 select columns_are('public', 'events', array['id', 'org_id', 'lead_id', 'type', 'payload', 'created_at']);
 select columns_are('public', 'webhook_events',
-  array['id', 'provider', 'provider_event_id', 'payload', 'received_at', 'processed_at']);
+  array['id', 'provider', 'provider_event_id', 'payload', 'received_at', 'processed_at',
+        'kind', 'org_id', 'lead_id', 'attempts', 'processing_error', 'result']);
 
 select col_type_is('public', 'leads', 'consent_at', 'timestamp with time zone', 'col_type_is leads consent_at, timestamp with time zone');
 select col_not_null('public', 'leads', 'consent_at', 'col_not_null leads consent_at');
