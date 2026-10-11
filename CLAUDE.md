@@ -33,3 +33,10 @@ deno check supabase/functions/*/index.ts
 - Client lead data stays in India (Supabase Mumbai) and is deleted on request.
 - No n8n, third-party CRM, custom inbox, AI chat agent or voice agent in the client path for v1.
 - Check current library docs (Context7) before using an API you haven't used in this repo.
+
+## How we build: the boss loop
+
+1. **Spec first.** Each feature gets `docs/specs/NNN-name.md` with a concrete bar: the exact things that must run and be true when it's done.
+2. **Prototype cheap.** Get the shape right with one agent, or a few workers on separate slices (separate directories, never the same file). No strict review yet.
+3. **Polish under the boss.** Run the `boss-reviewer` agent (`.claude/agents/boss-reviewer.md`). It didn't write the code; it runs the thing end to end and grades it against the spec's bar, then returns PASS or a numbered list of specific failures. Workers fix, boss re-checks. **Max 3 rounds**; after that a person decides.
+4. Skip the boss for small, well-specified changes and for exploration.

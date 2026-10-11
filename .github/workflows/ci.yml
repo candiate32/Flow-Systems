@@ -26,7 +26,7 @@ jobs:
       - run: npm run build
 
   functions:
-    name: Edge Functions (deno check)
+    name: Edge Functions (deno check, deno test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +34,10 @@ jobs:
         with:
           deno-version: v2.x
       - run: deno check supabase/functions/*/index.ts
+      - run: deno test -A supabase/functions
 
   database:
-    name: Database (supabase test db)
+    name: Database and end to end (supabase test db, ingest-form)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,9 +45,39 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - run: npm ci
-      - run: npx supabase db start
+      # No edge runtime here: `functions serve` below starts the only one, so requests never land mid-swap.
+      - run: npx supabase start -x studio,imgproxy,logflare,vector,edge-runtime
       - run: npx supabase test db
+      - name: Edge Function tests against the local database
+        run: |
+          eval "$(npx supabase status -o env | grep -E '^SERVICE_ROLE_KEY=')"
+          SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" deno test -A supabase/functions
+      - name: End to end through supabase functions serve
+        run: |
+          npx supabase functions serve > functions.log 2>&1 &
+          for i in $(seq 1 180); do grep -q "Serving functions on" functions.log && break; sleep 1; done
+          grep -q "Serving functions on" functions.log || { echo "::error title=functions serve::never started"; exit 1; }
+          # Then wait for a 200 from the function itself (Kong answers OPTIONS on its own).
+          # A full valid enquiry also warms the worker and its database client, so the timed request is warm.
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:54321/functions/v1/ingest-form \
+              -H 'content-type: application/json' \
+              -d '{"source_key":"demo-web-form","name":"Warm Up","phone":"9000000099","consent":true}' || true)
+            [ "$code" = 200 ] && break
+            sleep 2
+          done
+          [ "$code" = 200 ] || { echo "::error title=functions serve::ingest-form never returned 200 (last $code)"; exit 1; }
+          scripts/e2e-ingest.sh
+      - if: failure()
+        name: Show function logs
+        run: |
+          cat functions.log || true
+          # Also surface the tail as annotations, readable from the checks API.
+          tail -n 15 functions.log 2>/dev/null | while IFS= read -r line; do echo "::error title=functions serve::${line}"; done
 
   secrets:
     name: No server secrets in the repo
