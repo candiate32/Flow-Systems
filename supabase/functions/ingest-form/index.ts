@@ -12,6 +12,7 @@ import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { handleOptions, json } from "../_shared/http.ts";
 import { ackIdempotencyKey, enqueueJob, nextRunAt } from "../_shared/jobs.ts";
+import { captureException } from "../_shared/monitoring.ts";
 import {
   getWhatsAppProvider,
   type TemplateName,
@@ -262,6 +263,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     return withRequestId(json(200, { lead_id: savedLeadId, duplicate: false, ack_sent: ack.ok }), requestId);
   } catch (err) {
     log.add("internal_error", { error: errorMessage(err) });
+    await captureException(err, { fn: "ingest-form", request_id: requestId, org_id: orgId });
     return withRequestId(json(500, { error: "Something went wrong. Please try again." }), requestId);
   } finally {
     await log.flush(orgId, leadId);
