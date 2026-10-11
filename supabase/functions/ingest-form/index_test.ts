@@ -208,7 +208,7 @@ dbTest("happy path: saves one lead, acks it, alerts each owner, logs every step"
     assertEquals(provider.sent.length, 1 + DEMO_OWNER_PHONES.length);
     const ackSend = provider.sent.find((s) => s.template === "enquiry_ack")!;
     assertEquals(ackSend.to, phone.e164);
-    assertEquals(ackSend.params, ["Asha", "Demo Interiors, Sarjapur Road"]);
+    assertEquals(ackSend.params, ["Asha", "Lime & Lattice, Sarjapur Road"]);
     const alertSends = provider.sent.filter((s) => s.template === "owner_alert");
     assertEquals(alertSends.map((s) => s.to).sort(), [...DEMO_OWNER_PHONES].sort());
     assertEquals(alertSends[0].params, ["Asha Rao", phone.e164, "3BHK", "2027-03"]);
@@ -505,7 +505,7 @@ dbTest("provider failure: lead saved, failed messages and send_failed events, 20
       to: phone.e164,
       template: "enquiry_ack",
       language: "en",
-      params: ["Asha", "Demo Interiors, Sarjapur Road"],
+      params: ["Asha", "Lime & Lattice, Sarjapur Road"],
       first_auto_reply: true,
     });
     const enqueued = events.filter((e) => e.type === "ack_retry_enqueued");
