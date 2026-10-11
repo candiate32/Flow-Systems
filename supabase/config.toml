@@ -424,3 +424,11 @@ entrypoint = "./functions/health/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/health/*.html" ]
+
+# Public enquiry form endpoint. No JWT: the form is public; Turnstile is the
+# spam guard (skipped when TURNSTILE_SECRET is unset). Spec 002, "ingest-form".
+[functions.ingest-form]
+enabled = true
+verify_jwt = false
+import_map = "./functions/ingest-form/deno.json"
+entrypoint = "./functions/ingest-form/index.ts"
