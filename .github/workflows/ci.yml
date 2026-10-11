@@ -66,7 +66,11 @@ jobs:
           curl -s -o /dev/null -X POST http://127.0.0.1:54321/functions/v1/ingest-form -H 'content-type: application/json' -d '{}' || true
           scripts/e2e-ingest.sh
       - if: failure()
-        run: cat functions.log || true
+        name: Show function logs
+        run: |
+          cat functions.log || true
+          # Also surface the tail as annotations, readable from the checks API.
+          tail -n 15 functions.log 2>/dev/null | while IFS= read -r line; do echo "::error title=functions serve::${line}"; done
 
   secrets:
     name: No server secrets in the repo
