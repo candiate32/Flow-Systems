@@ -12,7 +12,7 @@ Deno.test("FakeWhatsAppProvider records sends and returns fake-<uuid> ids", asyn
     to: "+919845012345",
     template: "enquiry_ack" as const,
     language: "en",
-    params: ["Asha", "Demo Interiors"],
+    params: ["Asha", "Lime & Lattice"],
   };
   const a = await p.sendTemplate(msg);
   const b = await p.sendTemplate({ ...msg, template: "owner_alert", to: "+919000000001" });
@@ -22,7 +22,7 @@ Deno.test("FakeWhatsAppProvider records sends and returns fake-<uuid> ids", asyn
   assertEquals(p.sent.length, 2);
   assertEquals(p.sent[0].to, "+919845012345");
   assertEquals(p.sent[0].template, "enquiry_ack");
-  assertEquals(p.sent[0].params, ["Asha", "Demo Interiors"]);
+  assertEquals(p.sent[0].params, ["Asha", "Lime & Lattice"]);
   assertEquals(p.sent[0].providerMessageId, a.providerMessageId);
   assertEquals(p.sent[1].template, "owner_alert");
 });
