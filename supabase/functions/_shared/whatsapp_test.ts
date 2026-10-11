@@ -30,9 +30,17 @@ Deno.test("FakeWhatsAppProvider records sends and returns fake-<uuid> ids", asyn
 Deno.test("FakeWhatsAppProvider copies params so later mutation does not change the record", async () => {
   const p = new FakeWhatsAppProvider();
   const params = ["Asha"];
-  await p.sendTemplate({ to: "+919845012345", template: "followup", language: "en", params });
+  await p.sendTemplate({ to: "+919845012345", template: "followup_1", language: "en", params });
   params.push("changed");
   assertEquals(p.sent[0].params, ["Asha"]);
+});
+
+Deno.test("FakeWhatsAppProvider records session messages apart from templates", async () => {
+  const p = new FakeWhatsAppProvider();
+  const a = await p.sendSession({ to: "+919845012345", text: "Hi Asha" });
+  assertMatch(a.providerMessageId, UUID);
+  assertEquals(p.sessions, [{ to: "+919845012345", text: "Hi Asha", providerMessageId: a.providerMessageId }]);
+  assertEquals(p.sent.length, 0);
 });
 
 Deno.test("getWhatsAppProvider returns the fake by default", () => {

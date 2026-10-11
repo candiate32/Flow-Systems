@@ -358,6 +358,9 @@ class FailingProvider implements WhatsAppProvider {
     this.attempts.push(msg);
     return Promise.reject(new Error("provider is down (secret detail)"));
   }
+  sendSession(): Promise<{ providerMessageId: string }> {
+    return Promise.reject(new Error("ingest-form sends no session messages"));
+  }
 }
 
 dbTest("provider failure: lead saved, failed messages and send_failed events, 200 with ack_sent:false", async () => {
