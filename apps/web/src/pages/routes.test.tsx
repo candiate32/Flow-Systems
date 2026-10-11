@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
@@ -81,7 +81,7 @@ describe('/ showcase', () => {
     ])
   })
 
-  it('switches with the Left and Right keys, but not while choosing a chip', () => {
+  it('switches with the Left and Right keys, but never from inside the form', () => {
     renderAt('/')
     fireEvent.keyDown(document.body, { key: 'ArrowRight' })
     expect(showcaseForm('Lime & Lattice')).toBeTruthy()
@@ -94,8 +94,23 @@ describe('/ showcase', () => {
     expect(showcaseForm('Nila Design House')).toBeTruthy()
     expect(screen.getByRole('radio', { name: '3BHK' }).getAttribute('aria-checked')).toBe('true')
 
+    fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Asha' } })
     fireEvent.keyDown(screen.getByLabelText('Your name'), { key: 'ArrowRight' })
+    const submit = screen.getByRole('button', { name: 'Get my free consult slot' })
+    submit.focus()
+    fireEvent.keyDown(submit, { key: 'ArrowRight' })
+    fireEvent.keyDown(submit, { key: 'ArrowLeft' })
     expect(showcaseForm('Nila Design House')).toBeTruthy()
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Asha')
+  })
+
+  it('steps one form per key press, even before the page re-renders', () => {
+    renderAt('/')
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    })
+    expect(showcaseForm('Haveli Works')).toBeTruthy()
   })
 
   it('starts each form empty after a switch', () => {

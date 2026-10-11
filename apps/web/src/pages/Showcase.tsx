@@ -42,9 +42,12 @@ function ArrowLink({ to, label, direction }: { to: To; label: string; direction:
   )
 }
 
-/** Arrow keys switch forms unless the person is using them inside a field or chip group. */
-function isInFormControl(target: EventTarget | null): boolean {
-  return target instanceof Element && !!target.closest('input, select, textarea, [contenteditable], [role="radio"]')
+/**
+ * Arrow keys switch forms only from outside the form itself: a switch from any
+ * field, chip or button in it would throw away what the person has typed.
+ */
+function isInForm(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest('form, input, select, textarea, [contenteditable]')
 }
 
 /**
@@ -72,17 +75,26 @@ export default function Showcase() {
     if (window.scrollY > 0) window.scrollTo({ top: 0 })
   }, [config.slug])
 
+  // The key handler steps from this rather than from the render it was made in,
+  // so quick presses land on the right form before React re-renders.
+  const shownIndex = useRef(index)
+  useEffect(() => {
+    shownIndex.current = index
+  }, [index])
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
       if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
-      if (isInFormControl(e.target)) return
+      if (isInForm(e.target)) return
       e.preventDefault()
-      navigate(showcaseLink(e.key === 'ArrowLeft' ? prev.slug : next.slug), { replace: true })
+      const to = (shownIndex.current + (e.key === 'ArrowLeft' ? -1 : 1) + count) % count
+      shownIndex.current = to
+      navigate(showcaseLink(FORM_CONFIGS[to].slug), { replace: true })
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [navigate, prev.slug, next.slug])
+  }, [navigate, count])
 
   return (
     <div className="flex min-h-dvh flex-col bg-stone-950" style={{ fontFamily: SHARED_TYPE.fontBody }}>
