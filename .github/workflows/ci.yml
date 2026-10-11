@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  functions:
+    name: Edge Functions (deno check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno check supabase/functions/*/index.ts
+
+  database:
+    name: Database (supabase test db)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx supabase db start
+      - run: npx supabase test db
+
+  secrets:
+    name: No server secrets in the repo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block service_role / secret keys
+        run: |
+          # Supabase secret keys and JWT-style keys must live only in Supabase or GitHub secrets.
+          if git grep -nE 'sb_secret_[A-Za-z0-9_-]{10,}|eyJhbGciOi[A-Za-z0-9_-]{20,}' -- . ':!package-lock.json'; then
+            echo "::error::Possible Supabase key committed. Move it to Supabase or GitHub Actions secrets."
+            exit 1
+          fi
+          # Vite ships every VITE_ variable to the browser.
+          if git grep -niE 'VITE_[A-Z_]*(SERVICE_ROLE|SECRET)' -- apps; then
+            echo "::error::A secret is exposed through a VITE_ variable."
+            exit 1
+          fi
