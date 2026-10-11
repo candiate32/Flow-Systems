@@ -70,15 +70,15 @@ describe('admin page', () => {
     expect(rows).toHaveLength(2)
 
     const first = within(rows[0]).getAllByRole('cell').map((c) => c.textContent)
-    expect(first[0]).toBe('Asha Rao')
+    expect(first[0]).toMatch(/^Asha Rao/)
     expect(first[1]).toBe('+919876543210')
     expect(first[2]).toBe('3BHK')
     expect(first[3]).toMatch(/11 Oct 2026/)
     expect(first[3]).toMatch(/10:00/)
-    expect(first[4]).toBe('7')
+    expect(first[4]).toBe('7s')
 
     const second = within(rows[1]).getAllByRole('cell').map((c) => c.textContent)
-    expect(second[0]).toBe('Ravi Kumar')
+    expect(second[0]).toMatch(/^Ravi Kumar/)
     expect(second[3]).toMatch(/11 Oct 2026/) // 18:45 UTC is 00:15 IST the next day
     expect(second[4]).toBe('—')
 

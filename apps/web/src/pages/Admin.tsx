@@ -103,18 +103,23 @@ function LeadsTable() {
           <tr>
             <th className="px-3 py-2">Name</th>
             <th className="px-3 py-2">Phone</th>
-            <th className="px-3 py-2">BHK</th>
-            <th className="px-3 py-2">Created (IST)</th>
-            <th className="px-3 py-2 text-right">Reply (s)</th>
+            <th className="hidden px-3 py-2 sm:table-cell">BHK</th>
+            <th className="hidden px-3 py-2 sm:table-cell">Created (IST)</th>
+            <th className="px-3 py-2 text-right">Reply</th>
           </tr>
         </thead>
         <tbody>
           {leads.map((lead) => (
             <tr key={lead.id} className="border-t border-stone-100">
-              <td className="px-3 py-2">{lead.name}</td>
+              <td className="px-3 py-2">
+                {lead.name}
+                <div className="text-xs text-stone-500 sm:hidden">
+                  {lead.bhk ?? '—'} · {formatIst(lead.created_at)}
+                </div>
+              </td>
               <td className="whitespace-nowrap px-3 py-2">{lead.phone_e164}</td>
-              <td className="px-3 py-2">{lead.bhk ?? '—'}</td>
-              <td className="whitespace-nowrap px-3 py-2">{formatIst(lead.created_at)}</td>
+              <td className="hidden px-3 py-2 sm:table-cell">{lead.bhk ?? '—'}</td>
+              <td className="hidden whitespace-nowrap px-3 py-2 sm:table-cell">{formatIst(lead.created_at)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{replySeconds(lead)}</td>
             </tr>
           ))}
