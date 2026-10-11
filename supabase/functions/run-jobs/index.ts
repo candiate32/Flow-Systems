@@ -4,6 +4,8 @@
 // the right secret gets 401.
 //
 // A handler that throws re-queues its job with backoff (1, 5, 25, 120 minutes).
+// A handler that defers (a follow-up in quiet hours) re-queues it for the time
+// it names and gives back the attempt its claim used.
 // After max_attempts, or at once for a PermanentJobError, the job is `dead`:
 // a `job_dead` event is written and ops get an `ops_alert` WhatsApp template.
 // Full specifier on purpose, as in ingest-form.
@@ -41,6 +43,8 @@ export type RunSummary = {
   claimed: number;
   done: number;
   cancelled: number;
+  /** Jobs their handler put back in the queue for later (follow-ups in quiet hours). */
+  deferred: number;
   retried: number;
   dead: number;
   /** Jobs another runner took over (lease expired) before this one could settle them. */
@@ -49,7 +53,7 @@ export type RunSummary = {
   errors: number;
 };
 
-type Outcome = "done" | "cancelled" | "retried" | "dead" | "lost";
+type Outcome = "done" | "cancelled" | "deferred" | "retried" | "dead" | "lost";
 
 const DEFAULT_BATCH = 10;
 // pg_net waits 55 s; cron fires every 60 s. Overlapping runs are safe anyway
@@ -62,7 +66,16 @@ export async function runClaimedJobs(deps: Deps, opts: RunOptions = {}): Promise
   const budget = opts.timeBudgetMs ?? DEFAULT_BUDGET_MS;
   const handlers: Partial<Record<string, JobHandler>> = { ...defaultHandlers, ...deps.handlers };
   const started = performance.now();
-  const summary: RunSummary = { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 };
+  const summary: RunSummary = {
+    claimed: 0,
+    done: 0,
+    cancelled: 0,
+    deferred: 0,
+    retried: 0,
+    dead: 0,
+    lost: 0,
+    errors: 0,
+  };
 
   while (performance.now() - started < budget) {
     const jobs = must(
@@ -103,6 +116,14 @@ async function runOne(job: Job, handlers: Partial<Record<string, JobHandler>>, d
     if (!(await settle(job, deps, { status: "queued", run_at: runAt, last_error: error }))) return "lost";
     await addEvent(deps, job, "job_retry_scheduled", { attempt: job.attempts, error, run_at: runAt });
     return "retried";
+  }
+
+  if (outcome.status === "deferred") {
+    // Not a failure: give back the attempt the claim counted.
+    const runAt = outcome.runAt.toISOString();
+    if (!(await settle(job, deps, { status: "queued", run_at: runAt, attempts: job.attempts - 1 }))) return "lost";
+    await addEvent(deps, job, "job_deferred", { reason: outcome.reason, run_at: runAt });
+    return "deferred";
   }
 
   if (!(await settle(job, deps, { status: outcome.status }))) return "lost";
