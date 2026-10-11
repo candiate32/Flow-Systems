@@ -116,6 +116,8 @@ function contextFor(deps: Deps): JobContext {
     provider: deps.provider,
     now: deps.now,
     addEvent: (job, type, payload) => addEvent(deps, job, type, payload),
+    env: deps.env,
+    alertOps: (job, error) => alertOps(job, deps, error),
   };
 }
 

@@ -12,6 +12,7 @@ import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { handleOptions, json } from "../_shared/http.ts";
 import { ackIdempotencyKey, enqueueJob, nextRunAt } from "../_shared/jobs.ts";
+import { isCanaryToken } from "../_shared/canary.ts";
 import { captureException } from "../_shared/monitoring.ts";
 import {
   getWhatsAppProvider,
@@ -391,6 +392,8 @@ export function makeVerifyTurnstile(
   fetchFn: typeof fetch = fetch,
 ): Deps["verifyTurnstile"] {
   return async (token) => {
+    // The hourly canary (run-jobs/canary.ts) can't solve a challenge; it sends CANARY_SECRET instead.
+    if (isCanaryToken(token, env("CANARY_SECRET"))) return true;
     const secret = env("TURNSTILE_SECRET");
     if (!secret) {
       // Only the fake provider may run without spam protection; a real one would send WhatsApp to anyone.
