@@ -60,7 +60,10 @@ create index webhook_events_phone_idx on public.webhook_events (phone) where pho
 
 -- Redacts what the webhook kept about a lead being deleted: rows routed to
 -- it, and rows with its phone that were never tied to a lead, in its org or
--- not routed to any org.
+-- not routed to any org. A row not yet processed (unrouted, or failed fewer
+-- times than the limit) is closed as processed with outcome 'deleted': the
+-- provider's retry carries the original body, and processing it would
+-- recreate the deleted lead.
 create function private.redact_lead_webhook_events()
 returns trigger
 language plpgsql
@@ -70,7 +73,11 @@ as $$
 begin
   update public.webhook_events w
      set payload = jsonb_build_object('redacted', true),
-         result = null,
+         result = case when w.processed_at is null
+                       then jsonb_build_object('outcome', 'deleted', 'reason', 'lead deleted before the event was processed')
+                  end,
+         processed_at = coalesce(w.processed_at, now()),
+         processing_error = null,
          lead_id = null,
          phone = null
    where (w.lead_id = old.id
@@ -107,6 +114,26 @@ as $$
   end;
 $$;
 revoke execute on function private.message_status_rank(text) from public, anon, authenticated;
+
+-- followups_after -------------------------------------------------------------------
+-- Idempotency keys of the lead's queued follow-ups scheduled by an enquiry
+-- later than p_at. A reply sent at p_at answers enquiries up to p_at, not a
+-- newer one, so these are kept when a late-delivered old message cancels
+-- (passed as cancel_followups' p_keep_keys).
+create function private.followups_after(p_lead_id uuid, p_at timestamptz)
+returns text[]
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(array_agg(j.idempotency_key), '{}')
+    from public.jobs j
+   where j.lead_id = p_lead_id
+     and j.kind = 'followup'
+     and j.status = 'queued'
+     and (j.payload->>'enquiry_at')::timestamptz > p_at;
+$$;
+revoke execute on function private.followups_after(uuid, timestamptz) from public, anon, authenticated;
 
 -- process_whatsapp_event ---------------------------------------------------------
 -- p_event (built by whatsapp-webhook/index.ts from a NormalizedEvent):
@@ -232,8 +259,10 @@ begin
     if v_opt_out then
       v_cancelled := coalesce(private.record_opt_out(v_lead, v_at), '{}');
     else
+      -- Only follow-ups of enquiries up to the message time: a late delivery
+      -- of an old message is not a reply to a newer enquiry.
       select coalesce(array_agg(c), '{}') into v_cancelled
-        from private.cancel_followups(v_lead, 'lead replied', v_at) as c;
+        from private.cancel_followups(v_lead, 'lead replied', v_at, private.followups_after(v_lead, v_at)) as c;
     end if;
 
     if v_created then
@@ -260,12 +289,17 @@ begin
 
       -- first_human_reply_at is set once (metrics); last_human_reply_at only
       -- moves forward (greatest() skips nulls), and is what follow-ups check.
+      -- An echo from before the lead's first enquiry (its creation, or its
+      -- consent for a lead that wrote first) is not a reply to it: it is
+      -- stored but sets neither, so no reply time comes out negative.
       update public.leads l
          set first_human_reply_at = coalesce(l.first_human_reply_at, v_at),
              last_human_reply_at = greatest(l.last_human_reply_at, v_at)
-       where l.id = v_lead;
+       where l.id = v_lead
+         and v_at >= least(l.created_at, l.consent_at);
+      -- Only follow-ups of enquiries up to the echo time, as for inbound.
       select coalesce(array_agg(c), '{}') into v_cancelled
-        from private.cancel_followups(v_lead, 'staff replied', v_at) as c;
+        from private.cancel_followups(v_lead, 'staff replied', v_at, private.followups_after(v_lead, v_at)) as c;
 
       insert into public.events (org_id, lead_id, type, payload)
       values (v_org, v_lead, 'echo_received',
