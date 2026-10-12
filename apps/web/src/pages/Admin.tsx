@@ -4,6 +4,8 @@ import type { Session } from '@supabase/supabase-js'
 import { getSupabase } from '../lib/supabase'
 import { detailEntries, formatIst, replySeconds } from '../lib/format'
 import type { Lead } from '../lib/types'
+import { formatDuration, secondsToFirstHumanReply, type AdminLead } from './admin/metrics'
+import WeekNumbers from './admin/WeekNumbers'
 
 const inputClass =
   'mt-1 block w-full rounded-lg border border-stone-300 bg-white px-3 py-3 text-base focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/30'
@@ -87,20 +89,20 @@ function LeadDetails({ details }: { details: Lead['details'] }) {
 
 function LeadsTable() {
   const supabase = getSupabase()!
-  const [leads, setLeads] = useState<Lead[] | null>(null)
+  const [leads, setLeads] = useState<AdminLead[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     supabase
       .from('leads')
-      .select('id, name, phone_e164, bhk, created_at, first_auto_reply_at, details')
+      .select('id, name, phone_e164, bhk, created_at, last_enquiry_at, first_auto_reply_at, first_human_reply_at, details')
       .order('created_at', { ascending: false })
       .limit(500)
       .then(({ data, error }) => {
         if (cancelled) return
         if (error) setError(error.message)
-        else setLeads((data ?? []) as Lead[])
+        else setLeads((data ?? []) as AdminLead[])
       })
     return () => {
       cancelled = true
@@ -120,7 +122,8 @@ function LeadsTable() {
             <th className="px-3 py-2">Phone</th>
             <th className="hidden px-3 py-2 sm:table-cell">BHK</th>
             <th className="hidden px-3 py-2 sm:table-cell">Created (IST)</th>
-            <th className="px-3 py-2 text-right">Reply</th>
+            <th className="px-3 py-2 text-right">Auto-reply</th>
+            <th className="px-3 py-2 text-right">Team reply</th>
           </tr>
         </thead>
         <tbody>
@@ -137,6 +140,9 @@ function LeadsTable() {
               <td className="hidden px-3 py-2 sm:table-cell">{lead.bhk ?? '—'}</td>
               <td className="hidden whitespace-nowrap px-3 py-2 sm:table-cell">{formatIst(lead.created_at)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{replySeconds(lead)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
+                {formatDuration(secondsToFirstHumanReply(lead))}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -181,6 +187,8 @@ export default function Admin() {
         ) : session ? (
           <>
             <p className="mt-1 text-sm text-stone-500">Signed in as {session.user.email}</p>
+            <WeekNumbers supabase={supabase} />
+            <h2 className="mt-8 text-lg font-semibold">All leads</h2>
             <LeadsTable />
           </>
         ) : (
