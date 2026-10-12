@@ -287,11 +287,11 @@ dbTest("a running job whose lease expired is claimed again; past max_attempts it
   }
 });
 
-dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE means a skipped-alert event", async () => {
+dbTest("a kind not built yet (canary) dead-letters at once, visibly; no OPS_ALERT_PHONE means a skipped-alert event", async () => {
   await purgeTestJobs();
   const ids: string[] = [];
   try {
-    for (const kind of ["canary", "canary"]) {
+    for (const kind of ["canary"]) {
       ids.push((await enqueueJob(db, {
         org_id: DEMO_ORG,
         kind,
@@ -301,7 +301,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
     }
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
-    assertEquals(summary.dead, 2);
+    assertEquals(summary.dead, 1);
     for (const id of ids) {
       const job = await jobRow(id);
       assertEquals(job.status, "dead");
