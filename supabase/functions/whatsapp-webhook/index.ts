@@ -280,9 +280,10 @@ async function processEvent(deps: Deps, source: Source, event: NormalizedEvent, 
 
 /**
  * Records a failed attempt. The attempt is counted in SQL, so two deliveries
- * failing at once both count. After the last attempt the event is a dead
- * letter: a `webhook_event_failed` event plus an ops alert, since it may be a
- * real customer's message that nobody would otherwise see.
+ * failing at once both count. The delivery whose attempt reaches the limit
+ * makes the event a dead letter: a `webhook_event_failed` event plus an ops
+ * alert, since it may be a real customer's message that nobody would
+ * otherwise see. Deliveries past the limit just answer 200.
  */
 async function recordFailure(
   deps: Deps,
@@ -307,6 +308,9 @@ async function recordFailure(
     ...(res.error ? { record_error: res.error.message } : {}),
   });
   if (attempts < MAX_PROCESSING_ATTEMPTS) return { status: "failed", attempts };
+  // Concurrent redeliveries can all fail; the counter is atomic, so exactly
+  // one of them took it to the limit. Only that one dead-letters and alerts.
+  if (attempts > MAX_PROCESSING_ATTEMPTS) return { status: "dead" };
   await addEvent(deps, source.org_id, null, "webhook_event_failed", {
     webhook_event_id: row.id,
     provider_event_id: event.providerEventId,

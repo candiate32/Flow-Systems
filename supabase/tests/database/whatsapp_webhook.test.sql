@@ -1,7 +1,7 @@
 -- Spec 004, slice C: webhook_events additions, process_whatsapp_event and the
 -- lead-delete redaction (supabase/migrations/20261015120000_whatsapp_webhook.sql).
 begin;
-select plan(84);
+select plan(96);
 
 -- Schema and privileges -------------------------------------------------------
 select has_function('private', 'process_whatsapp_event', array['bigint', 'uuid', 'jsonb', 'timestamp with time zone']);
@@ -272,6 +272,21 @@ select results_eq(
             (900022::bigint, '{"redacted": true}'::jsonb, null::text),
             (900023::bigint, '{"phone":"+919811120002","text":"theirs"}'::jsonb, '+919811120002'::text) $$,
   'deleting a lead also redacts rows with its phone in its org or unrouted, not another org''s');
+select results_eq(
+  $$ select id, processed_at is not null, result->>'outcome', processing_error from public.webhook_events
+      where id in (900021, 900022, 900023) order by id $$,
+  $$ values (900021::bigint, true, 'deleted'::text, null::text),
+            (900022::bigint, true, 'deleted'::text, null::text),
+            (900023::bigint, false, null::text, null::text) $$,
+  'and closes the unprocessed ones as processed with outcome deleted');
+select is(
+  public.process_whatsapp_event(900022, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"inbound","phone":"+919811120002","text":"secret","at":"2030-01-05T07:00:00Z","provider_message_id":"wh-in-unrouted"}')->>'outcome',
+  'duplicate', 'so the provider''s retry of an unrouted event, now routed, is a duplicate');
+select is(
+  public.process_whatsapp_event(900021, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"inbound","phone":"+919811120002","text":"secret","at":"2030-01-05T07:00:00Z","provider_message_id":"wh-in-dead"}')->>'outcome',
+  'duplicate', 'and so is the retry of one that had failed');
 select results_eq($$ select payload, lead_id, result, processed_at is not null from public.webhook_events where id = 900001 $$,
   $$ values ('{"redacted": true}'::jsonb, null::uuid, null::jsonb, true) $$,
   'deleting a lead redacts its webhook payload but keeps the processed row');
@@ -280,6 +295,70 @@ select is(
     '{"kind":"inbound","phone":"+919811120002","text":"Hi","at":"2030-01-05T06:00:00Z","provider_message_id":"wh-in-1"}')->>'outcome',
   'duplicate', 'so a late provider retry does not recreate the deleted lead');
 select is((select count(*)::int from public.leads where phone_e164 = '+919811120002'), 0, 'which stays deleted');
+
+-- Late delivery of an old message vs a newer enquiry ---------------------------------------
+-- Lead C enquired on 2030-02-01 and again on 2030-02-10; each enquiry has its
+-- queued follow-ups. Messages stamped between the two only answer the first.
+insert into public.leads (id, org_id, name, phone_e164, consent_at, last_enquiry_at, created_at)
+values ('40000000-0000-4000-8000-0000000000b3', '40000000-0000-4000-8000-000000000001', 'Late Lead', '+919811120007',
+        '2030-02-10T05:00:00Z', '2030-02-10T05:00:00Z', '2030-02-01T05:00:00Z');
+insert into public.jobs (org_id, lead_id, kind, run_at, idempotency_key, payload)
+values ('40000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-0000000000b3', 'followup', '2030-02-02T05:30:00Z',
+        'wh-late-old', '{"n":1,"enquiry_at":"2030-02-01T05:00:00.000Z"}'),
+       ('40000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-0000000000b3', 'followup', '2030-02-11T05:30:00Z',
+        'wh-late-new-1', '{"n":1,"enquiry_at":"2030-02-10T05:00:00.000Z"}'),
+       ('40000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-0000000000b3', 'followup', '2030-02-13T05:30:00Z',
+        'wh-late-new-2', '{"n":2,"enquiry_at":"2030-02-10T05:00:00.000Z"}');
+insert into public.webhook_events (id, provider, provider_event_id, payload) overriding system value
+values (900031, 'fake', 'wh-e-late-echo', '{}'), (900032, 'fake', 'wh-e-late-in', '{}'),
+       (900033, 'fake', 'wh-e-pre-echo', '{}'), (900034, 'fake', 'wh-e-new-echo', '{}');
+
+select is(
+  public.process_whatsapp_event(900031, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"echo","phone":"+919811120007","text":"old reply","at":"2030-02-05T05:00:00Z","provider_message_id":"wh-late-echo"}')
+    ->'cancelled_jobs',
+  (select jsonb_agg(id) from public.jobs where idempotency_key = 'wh-late-old'),
+  'an echo stamped before the newer enquiry cancels only the older enquiry''s follow-ups');
+select results_eq(
+  $$ select idempotency_key, status from public.jobs where lead_id = '40000000-0000-4000-8000-0000000000b3' order by idempotency_key $$,
+  $$ values ('wh-late-new-1'::text, 'queued'::text), ('wh-late-new-2'::text, 'queued'::text), ('wh-late-old'::text, 'cancelled'::text) $$,
+  'the newer enquiry''s follow-ups stay queued');
+select is(
+  public.process_whatsapp_event(900032, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"inbound","phone":"+919811120007","text":"old message","at":"2030-02-06T05:00:00Z","provider_message_id":"wh-late-in"}')
+    ->'cancelled_jobs',
+  '[]'::jsonb, 'an inbound stamped before the newer enquiry does not cancel its follow-ups either');
+select is((select count(*)::int from public.jobs where lead_id = '40000000-0000-4000-8000-0000000000b3' and status = 'queued'), 2,
+  'still two queued');
+select is(
+  public.process_whatsapp_event(900033, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"echo","phone":"+919811120007","text":"before any enquiry","at":"2030-01-20T05:00:00Z","provider_message_id":"wh-pre-echo"}')
+    ->>'outcome',
+  'processed', 'an echo from before the lead''s first enquiry is stored');
+select results_eq(
+  $$ select first_human_reply_at, last_human_reply_at from public.leads where id = '40000000-0000-4000-8000-0000000000b3' $$,
+  $$ values ('2030-02-05T05:00:00Z'::timestamptz, '2030-02-05T05:00:00Z'::timestamptz) $$,
+  'but sets no reply time (the earlier late echo after the first enquiry did)');
+select is(
+  public.process_whatsapp_event(900034, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"echo","phone":"+919811120007","text":"new reply","at":"2030-02-10T06:00:00Z","provider_message_id":"wh-new-echo"}')
+    ->'cancelled_jobs',
+  (select jsonb_agg(id order by idempotency_key) from public.jobs where idempotency_key like 'wh-late-new-%'),
+  'an echo after the newer enquiry cancels its follow-ups');
+
+-- An echo before a lead's first enquiry leaves first_human_reply_at empty.
+insert into public.leads (id, org_id, name, phone_e164, consent_at, last_enquiry_at, created_at)
+values ('40000000-0000-4000-8000-0000000000b4', '40000000-0000-4000-8000-000000000001', 'New Lead', '+919811120008',
+        '2030-03-01T05:00:00Z', '2030-03-01T05:00:00Z', '2030-03-01T05:00:00Z');
+insert into public.webhook_events (id, provider, provider_event_id, payload) overriding system value
+values (900035, 'fake', 'wh-e-before-lead', '{}');
+select ok(public.process_whatsapp_event(900035, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"echo","phone":"+919811120008","text":"hello","at":"2030-02-20T05:00:00Z","provider_message_id":"wh-before-lead"}')
+    ->>'outcome' = 'processed', 'an echo from before a lead existed is processed');
+select results_eq(
+  $$ select first_human_reply_at, last_human_reply_at from public.leads where id = '40000000-0000-4000-8000-0000000000b4' $$,
+  $$ values (null::timestamptz, null::timestamptz) $$,
+  'and leaves both reply times empty, so no negative reply time');
 
 -- webhook_events is service-role only ----------------------------------------------------
 insert into auth.users (id, aud, role, email)

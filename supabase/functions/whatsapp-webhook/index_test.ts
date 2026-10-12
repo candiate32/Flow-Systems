@@ -734,3 +734,76 @@ dbTest("an echo after a repeat enquiry stops a follow-up that was already runnin
     await cleanup();
   }
 });
+
+// --- Concurrent dead letters and deleted leads ---------------------------------------
+
+dbTest("six concurrent failing redeliveries dead-letter the event once, with one ops alert", async () => {
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone, T);
+  cleanupLeads.push(leadId);
+  const ev = inbound(phone, "poison", T);
+  const body = JSON.stringify({ events: [ev] });
+  let rowId: number | undefined;
+  try {
+    const provider = new FakeWhatsAppProvider();
+    const env = (k: string) => (k === "OPS_ALERT_PHONE" ? "+919000000099" : undefined);
+    const d = deps({ db: failingDb((id) => id === ev.id, new Map()), provider, env });
+    // Stored first, so all six race on the same row.
+    const first = await handler(await signed(body), d);
+    assertEquals(first.status, 500);
+    await first.body?.cancel();
+    const codes = await Promise.all(Array.from({ length: 6 }, async () => {
+      const res = await handler(await signed(body), d);
+      await res.body?.cancel();
+      return res.status;
+    }));
+    const row = await webhookRow(ev.id);
+    rowId = row!.id;
+    assert(row!.attempts >= MAX_PROCESSING_ATTEMPTS, `attempts ${row!.attempts}`);
+    assertEquals(row!.processed_at, null);
+    assert(codes.includes(200), `codes ${codes}`);
+
+    const { data: dead } = await db.from("events").select("id").eq("type", "webhook_event_failed")
+      .eq("payload->>provider_event_id", ev.id);
+    assertEquals(dead!.length, 1, "one dead-letter event");
+    assertEquals(provider.sent.filter((s) => s.template === "ops_alert").length, 1, "one ops alert");
+    const { data: alerts } = await db.from("events").select("type").like("type", "ops_alert_%")
+      .eq("payload->>webhook_event_id", String(rowId));
+    assertEquals(alerts!.map((a) => a.type), ["ops_alert_sent"]);
+  } finally {
+    await db.from("events").delete().eq("type", "webhook_event_failed").eq("payload->>provider_event_id", ev.id);
+    if (rowId !== undefined) await db.from("events").delete().like("type", "ops_alert_%").eq("payload->>webhook_event_id", String(rowId));
+    await cleanup();
+  }
+});
+
+dbTest("after a lead is deleted, the provider's retry of its unrouted event recreates nothing and sends nothing", async () => {
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone, T);
+  cleanupLeads.push(leadId);
+  const ev = inbound(phone, "Please call me", T, { profile_name: "Deleted Person" });
+  try {
+    // Delivered to a URL without ?source=: stored, not processed.
+    const unrouted = await post(deps(), [ev], { source: null });
+    assertEquals(unrouted.status, 404);
+    assertEquals((await webhookRow(ev.id))!.phone, phone);
+
+    // The person asks for deletion.
+    const { error } = await db.from("leads").delete().eq("id", leadId);
+    if (error) throw error;
+    const row = await webhookRow(ev.id);
+    assertEquals(row!.payload, { redacted: true });
+    assertEquals((row!.result as { outcome: string }).outcome, "deleted");
+    assertExists(row!.processed_at);
+
+    // The provider retries with the original body, now to the right URL.
+    const provider = new FakeWhatsAppProvider();
+    const retry = await post(deps({ provider }), [ev]);
+    assertEquals(retry.status, 200);
+    assertEquals(retry.body.duplicates, 1);
+    assertEquals(await lead(phone), null, "the lead is not recreated");
+    assertEquals(provider.sent.length + provider.sessions.length, 0, "nothing is sent");
+  } finally {
+    await cleanup();
+  }
+});
