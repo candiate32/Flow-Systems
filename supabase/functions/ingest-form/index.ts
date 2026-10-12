@@ -190,13 +190,18 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // A lead who opted out (STOP) and now submits the form again with the
       // consent box ticked has opted back in: this is the only thing that
       // clears opted_out_at (spec 004, "Defaults picked"). A duplicate within
-      // 24h returned above and does not.
+      // 24h returned above and does not. The opted_out_at guard stops this
+      // update from wiping a STOP recorded after we read the lead; that case
+      // falls through to duplicate() and sends nothing.
       const details = { ...(existing.details as Record<string, Json>), ...enquiry.details };
+      const update = db.from("leads")
+        .update({ ...fields, details, opted_out_at: null })
+        .eq("id", existing.id)
+        .eq("last_enquiry_at", existing.last_enquiry_at);
       const updated = must(
-        await db.from("leads")
-          .update({ ...fields, details, opted_out_at: null })
-          .eq("id", existing.id)
-          .eq("last_enquiry_at", existing.last_enquiry_at)
+        await (existing.opted_out_at
+          ? update.eq("opted_out_at", existing.opted_out_at)
+          : update.is("opted_out_at", null))
           .select("id")
           .maybeSingle(),
         "update lead",
