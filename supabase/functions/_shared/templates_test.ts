@@ -6,7 +6,9 @@ import {
   INBOUND_ACK_TEXT,
   renderInboundAck,
   renderTemplate,
+  renderWeeklySummary,
   TEMPLATE_TEXTS,
+  WEEKLY_SUMMARY_TEXT,
 } from "./templates.ts";
 import { TEMPLATE_NAMES } from "./whatsapp.ts";
 
@@ -54,4 +56,11 @@ Deno.test("renderInboundAck fills the first name and studio, and says how to opt
   const used = [...new Set([...INBOUND_ACK_TEXT.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])))].sort();
   assertEquals(used, [1, 2]);
   assertThrows(() => renderInboundAck(["Ravi"]), RangeError);
+});
+
+Deno.test("weekly_summary uses exactly {{1}}..{{7}} and refuses the wrong number of params", () => {
+  const used = [...new Set([...WEEKLY_SUMMARY_TEXT.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])))].sort();
+  assertEquals(used, WEEKLY_SUMMARY_TEXT.params.map((_, i) => i + 1));
+  assertEquals(used.length, 7);
+  assertThrows(() => renderWeeklySummary(["Studio"]), RangeError);
 });
