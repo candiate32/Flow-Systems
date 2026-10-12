@@ -79,6 +79,14 @@ New tables get RLS, plus a test that org A can't read org B's rows.
 5. An echo sets `first_human_reply_at` if empty and stores an `echo` message.
 6. A status event updates `messages.status` (`sent` → `delivered` → `read`, never backwards) or marks it `failed`.
 
+Built as (slice C):
+- The webhook adapter is in `_shared/whatsapp_webhook.ts` (sending stays in `whatsapp.ts`). Its header maps Meta's payload, including `smb_message_echoes`, onto `NormalizedEvent`.
+- Routing: each org's number posts to `whatsapp-webhook?source=<public_key>` of its `whatsapp_inbound` source. The demo org's key is `demo-whatsapp-inbound`. An unknown source gets 404 after the events are stored, so the provider retries once it is fixed.
+- One SQL function, `process_whatsapp_event`, applies an event and sets `processed_at` in one transaction. That includes the follow-up cancel or opt-out (B.3).
+- A failed event is recorded (`attempts`, `processing_error`) and the delivery gets 500, so the provider resends it. Processed events come back as duplicates. After 3 failed attempts the event is a dead letter (`webhook_event_failed`) and the delivery gets 200.
+- A lead created by its first message gets follow-ups from the inbound time. An opt-out sends nothing, not even a confirmation.
+- `failed` replaces `sent`; a later `delivered` or `read` wins over `failed`.
+
 **D. Metrics and report**
 1. The view `lead_response_metrics` (`security_invoker`) gives per lead:
    - seconds to auto-reply;
