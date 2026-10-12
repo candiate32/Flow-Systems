@@ -215,6 +215,33 @@ dbTest("onboard-org: refuses a slug or public key that belongs to another org, a
   }
 });
 
+dbTest("onboard-org: refuses to make an org with real leads the canary", async () => {
+  const slug = slugOf();
+  const file = await writeConfig(studio(slug));
+  try {
+    assertEquals((await run([file])).code, 0);
+    const { data: org } = await db.from("orgs").select("id").eq("slug", slug).single();
+    await db.from("leads").insert({
+      org_id: org!.id,
+      name: "Asha Rao",
+      phone_e164: "+919845012345",
+      consent_at: new Date().toISOString(),
+    });
+    await Deno.writeTextFile(file, JSON.stringify(studio(slug, { is_canary: true }), null, 2));
+    const r = await run([file]);
+    assertEquals(r.code, 1);
+    assert(
+      r.err[0].endsWith("is_canary: this org has 1 lead(s), so it can't be the canary; use an org of its own"),
+      r.err[0],
+    );
+    const { data: after } = await db.from("orgs").select("is_canary").eq("id", org!.id).single();
+    assertEquals(after!.is_canary, false);
+  } finally {
+    await db.from("orgs").delete().eq("slug", slug);
+    await Deno.remove(file);
+  }
+});
+
 dbTest("onboard-org: the sample config matches the seeded demo org; only its templates are new", async () => {
   const parsed = parseOrgConfig(await Deno.readTextFile(SAMPLE));
   if (!parsed.ok) throw new Error("sample should be valid");
@@ -222,12 +249,7 @@ dbTest("onboard-org: the sample config matches the seeded demo org; only its tem
   if (!r.ok) throw new Error(r.errors.map((e) => formatError("sample", e)).join("\n"));
   assertEquals(r.plan.orgId, DEMO_ORG);
   const nonTemplate = r.plan.changes.filter((c) => c.table !== "templates");
-  // Until the seed's rename to Lime & Lattice (PR #9) is merged, the name is the one difference.
-  for (const c of nonTemplate) {
-    assert(c.table === "orgs" && c.op === "update", `unexpected change ${c.table} ${c.op}`);
-    assertEquals(Object.keys(c.changes), ["name"]);
-  }
-  assert(r.plan.changes.every((c) => c.table !== "templates" || c.op === "create" || c.op === "update"));
+  assertEquals(nonTemplate, [], "org and source already match the seed");
 });
 
 Deno.test("onboard-org: an invalid config writes nothing and names the line", async () => {

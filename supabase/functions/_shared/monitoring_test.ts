@@ -106,10 +106,42 @@ Deno.test("monitoring: events are scrubbed of Indian mobile numbers, ids are kep
       extra: { to: "+91 9812345678", job_id: id, n: 1 },
     }),
     {
-      message: "send failed: [phone] is not on WhatsApp; 98123 45678 and [phone] too",
+      message: "send failed: [phone] is not on WhatsApp; [phone] and [phone] too",
       extra: { to: "[phone]", job_id: id, n: 1 },
     },
   );
+});
+
+Deno.test("monitoring: phone numbers are scrubbed in the ways people write them", () => {
+  for (
+    const written of [
+      "9812345678",
+      "98123 45678",
+      "98123-45678",
+      "981 234 5678",
+      "+919812345678",
+      "+91 98123 45678",
+      "+91-98123-45678",
+      "919812345678",
+      "09812345678",
+      "0091 9812345678",
+    ]
+  ) {
+    assertEquals(scrubPhones({ e: `to ${written}: failed` }), { e: "to [phone]: failed" }, written);
+  }
+  assertEquals(scrubPhones({ e: "line one\n9812345678" }), { e: "line one\n[phone]" });
+});
+
+Deno.test("monitoring: ids, times and other numbers are left alone", () => {
+  const kept = {
+    job_id: "00000000-0000-4000-8000-912345678901",
+    at: "2026-10-11T21:30:38.263Z",
+    ms: 1791758047000,
+    big: "98123456789012",
+    attempts: "3 of 5",
+    short: "98123 456",
+  };
+  assertEquals(scrubPhones(kept), kept);
 });
 
 // The real SDK, sending to a local server that stands in for Sentry.

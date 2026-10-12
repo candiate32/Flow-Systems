@@ -2,7 +2,7 @@
 // the canary org (orgs.is_canary) through the real ingest-form URL, then checks
 // that the lead's first_auto_reply_at was recorded within 60 seconds of the
 // enquiry. If not, or if the post fails, ops get an `ops_alert`. Each run
-// queues the next one an hour later and deletes canary leads older than 7 days
+// queues the next one an hour later and deletes its own leads older than 7 days
 // through delete_lead. What to do when it alerts is in docs/runbook.md.
 //
 // The phone it enquires with:
@@ -11,9 +11,17 @@
 //   first, so every hour is a new enquiry rather than a 24-hour duplicate.
 // - otherwise a made-up number per hour (+91 6000 plus six digits), allowed
 //   only with the fake provider.
+//
+// A canary lead is one the canary created: from the canary org's web form,
+// named "Flow Canary", from CANARY_PHONE or a made-up +916000 number. Cleanup
+// and the delete-before-post touch nothing else, so a real lead that ends up
+// in the canary org is never deleted by the canary.
+//
+// The whole run fits inside pg_net's 55 s wait for run-jobs: the post may take
+// 20 s and the check ends 40 s after the post started.
 // deno-lint-ignore no-import-prefix -- see index.ts
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
-import { canaryTurnstileToken } from "../_shared/canary.ts";
+import { CANARY_LEAD_NAME, canaryTurnstileToken, SYNTHETIC_CANARY_PHONE_RE } from "../_shared/canary.ts";
 import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must } from "../_shared/db.ts";
 import { enqueueJob, type Job } from "../_shared/jobs.ts";
@@ -24,9 +32,16 @@ import type { JobContext, JobHandler } from "./handlers.ts";
 export const AUTO_REPLY_DEADLINE_MS = 60_000;
 export const CANARY_INTERVAL_MS = 60 * 60_000;
 export const CANARY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How long after the post the canary looks for the auto-reply. ingest-form
+ * sends the acknowledgement before it answers, so it is normally recorded by
+ * the time the post returns. If that inline send failed, the next try is the
+ * retry job a minute later, already past the 60 s promise, so waiting longer
+ * than this could not turn a failure into a pass.
+ */
+export const CHECK_WINDOW_MS = 40_000;
 const POLL_MS = 2_000;
-const POST_TIMEOUT_MS = 30_000;
-const CANARY_LEAD_NAME = "Flow Canary";
+const POST_TIMEOUT_MS = 20_000;
 
 /**
  * One canary job per org per UTC hour: canary:<org_id>:<YYYY-MM-DDTHH>.
@@ -46,12 +61,14 @@ export function syntheticCanaryPhone(at: Date): string {
 export type CanaryStore = {
   isCanaryOrg(orgId: string): Promise<boolean>;
   enqueueCanary(orgId: string, runAt: Date): Promise<void>;
-  /** Ids of the org's leads created before `before`, at most `limit`. */
-  leadsCreatedBefore(orgId: string, before: Date, limit: number): Promise<string[]>;
-  findLead(orgId: string, phone: string): Promise<string | null>;
+  /** Leads from this source named "Flow Canary" created before `before`, at most `limit`. */
+  canaryNamedLeadsBefore(sourceId: string, before: Date, limit: number): Promise<{ id: string; phone: string }[]>;
+  /** The lead from this source named "Flow Canary" with this phone, if any. */
+  findCanaryLead(sourceId: string, phone: string): Promise<string | null>;
   /** Calls public.delete_lead. */
   deleteLead(leadId: string): Promise<void>;
-  webFormKey(orgId: string): Promise<string | null>;
+  /** The canary org's (first) web form. */
+  webForm(orgId: string): Promise<{ id: string; public_key: string } | null>;
   autoReply(leadId: string): Promise<{ first_auto_reply_at: string | null; last_enquiry_at: string } | null>;
 };
 
@@ -69,17 +86,18 @@ export function supabaseCanaryStore(db: SupabaseClient<Database>): CanaryStore {
         idempotency_key: canaryIdempotencyKey(orgId, runAt),
       });
     },
-    async leadsCreatedBefore(orgId, before, limit) {
+    async canaryNamedLeadsBefore(sourceId, before, limit) {
       const rows = must(
-        await db.from("leads").select("id").eq("org_id", orgId).lt("created_at", before.toISOString())
-          .order("created_at").limit(limit),
+        await db.from("leads").select("id, phone_e164").eq("source_id", sourceId).eq("name", CANARY_LEAD_NAME)
+          .lt("created_at", before.toISOString()).order("created_at").limit(limit),
         "find old canary leads",
       );
-      return (rows ?? []).map((r) => r.id);
+      return (rows ?? []).map((r) => ({ id: r.id, phone: r.phone_e164 }));
     },
-    async findLead(orgId, phone) {
+    async findCanaryLead(sourceId, phone) {
       const row = must(
-        await db.from("leads").select("id").eq("org_id", orgId).eq("phone_e164", phone).maybeSingle(),
+        await db.from("leads").select("id").eq("source_id", sourceId).eq("name", CANARY_LEAD_NAME)
+          .eq("phone_e164", phone).maybeSingle(),
         "find canary lead",
       );
       return row?.id ?? null;
@@ -87,13 +105,12 @@ export function supabaseCanaryStore(db: SupabaseClient<Database>): CanaryStore {
     async deleteLead(leadId) {
       must(await db.rpc("delete_lead", { lead: leadId }), "delete_lead");
     },
-    async webFormKey(orgId) {
-      const row = must(
-        await db.from("sources").select("public_key").eq("org_id", orgId).eq("kind", "web_form")
+    async webForm(orgId) {
+      return must(
+        await db.from("sources").select("id, public_key").eq("org_id", orgId).eq("kind", "web_form")
           .order("created_at").limit(1).maybeSingle(),
         "find canary source",
       );
-      return row?.public_key ?? null;
     },
     async autoReply(leadId) {
       return must(
@@ -114,6 +131,8 @@ type Probe =
   | { ok: true; leadId: string; secondsToAutoReply: number; postMs: number }
   | { ok: false; reason: string; leadId?: string };
 
+type Source = { id: string; public_key: string };
+
 export function makeCanaryHandler(deps: CanaryDeps): JobHandler {
   return async (job, ctx) => {
     const store = deps.store(ctx.db);
@@ -126,12 +145,20 @@ export function makeCanaryHandler(deps: CanaryDeps): JobHandler {
     // A failure here throws, and the job is retried before anything is posted.
     await store.enqueueCanary(job.org_id, new Date(ctx.now().getTime() + CANARY_INTERVAL_MS));
 
-    await deleteOldLeads(job, ctx, store);
+    const source = await store.webForm(job.org_id);
+    const phone = canaryPhone(ctx);
+    if (source) await deleteOldLeads(job, ctx, store, source, phone.ok ? phone.phone : null);
 
-    const probe = await runProbe(job, ctx, deps, store);
+    const probe: Probe = !source
+      ? { ok: false, reason: "the canary org has no web_form source" }
+      : !phone.ok
+      ? { ok: false, reason: phone.reason }
+      : await runProbe(ctx, deps, store, source, phone.phone);
+    // probe_lead_id, not lead_id: these results outlive the canary lead
+    // (delete_lead removes events that carry a lead_id).
     if (probe.ok) {
       await ctx.addEvent(job, "canary_passed", {
-        lead_id: probe.leadId,
+        probe_lead_id: probe.leadId,
         seconds_to_auto_reply: probe.secondsToAutoReply,
         post_ms: probe.postMs,
       });
@@ -140,17 +167,28 @@ export function makeCanaryHandler(deps: CanaryDeps): JobHandler {
     // The job itself is done: the next canary is already queued, and a
     // retry would only post another enquiry.
     const payload: Record<string, Json> = { reason: probe.reason };
-    if (probe.leadId) payload.lead_id = probe.leadId;
+    if (probe.leadId) payload.probe_lead_id = probe.leadId;
     await ctx.addEvent(job, "canary_failed", payload);
     await ctx.alertOps(job, `canary: ${probe.reason}`);
   };
 }
 
-/** Deletes canary leads older than 7 days. Never throws: cleanup must not stop the check. */
-async function deleteOldLeads(job: Job, ctx: JobContext, store: CanaryStore): Promise<void> {
+/**
+ * Deletes the canary's own leads older than 7 days: from its form, named
+ * "Flow Canary", from CANARY_PHONE or a made-up +916000 number. Never throws:
+ * cleanup must not stop the check.
+ */
+async function deleteOldLeads(
+  job: Job,
+  ctx: JobContext,
+  store: CanaryStore,
+  source: Source,
+  phone: string | null,
+): Promise<void> {
   try {
     const before = new Date(ctx.now().getTime() - CANARY_RETENTION_MS);
-    const ids = await store.leadsCreatedBefore(job.org_id, before, 100);
+    const named = await store.canaryNamedLeadsBefore(source.id, before, 100);
+    const ids = named.filter((l) => l.phone === phone || SYNTHETIC_CANARY_PHONE_RE.test(l.phone)).map((l) => l.id);
     for (const id of ids) await store.deleteLead(id);
     if (ids.length) await ctx.addEvent(job, "canary_leads_deleted", { count: ids.length });
   } catch (err) {
@@ -158,35 +196,42 @@ async function deleteOldLeads(job: Job, ctx: JobContext, store: CanaryStore): Pr
   }
 }
 
-async function runProbe(job: Job, ctx: JobContext, deps: CanaryDeps, store: CanaryStore): Promise<Probe> {
+/** The number to enquire from: CANARY_PHONE, or a made-up one with the fake provider only. */
+function canaryPhone(ctx: JobContext): { ok: true; phone: string } | { ok: false; reason: string } {
+  const fixed = ctx.env("CANARY_PHONE");
+  const provider = ctx.env("WHATSAPP_PROVIDER") ?? "";
+  if (fixed) {
+    const p = normalizeIndianMobile(fixed);
+    return p ? { ok: true, phone: p } : { ok: false, reason: "CANARY_PHONE is not a valid Indian mobile number" };
+  }
+  if (provider === "" || provider === "fake") return { ok: true, phone: syntheticCanaryPhone(ctx.now()) };
+  return { ok: false, reason: "CANARY_PHONE must be set when a real WhatsApp provider is configured" };
+}
+
+async function runProbe(
+  ctx: JobContext,
+  deps: CanaryDeps,
+  store: CanaryStore,
+  source: Source,
+  phone: string,
+): Promise<Probe> {
   const fail = (reason: string, leadId?: string): Probe => ({ ok: false, reason, leadId });
 
   const url = ctx.env("INGEST_FORM_URL");
   if (!url) return fail("INGEST_FORM_URL is not set");
 
-  let phone: string;
-  const fixed = ctx.env("CANARY_PHONE");
-  const provider = ctx.env("WHATSAPP_PROVIDER") ?? "";
-  if (fixed) {
-    const p = normalizeIndianMobile(fixed);
-    if (!p) return fail("CANARY_PHONE is not a valid Indian mobile number");
-    phone = p;
-  } else if (provider === "" || provider === "fake") {
-    phone = syntheticCanaryPhone(ctx.now());
-  } else {
-    return fail("CANARY_PHONE must be set when a real WhatsApp provider is configured");
-  }
-
-  const sourceKey = await store.webFormKey(job.org_id);
-  if (!sourceKey) return fail("the canary org has no web_form source");
-
-  // Start with no lead for this number, so the enquiry is new and gets an
-  // auto-reply instead of being dropped as a duplicate.
-  const prior = await store.findLead(job.org_id, phone);
+  // Start with no canary lead for this number, so the enquiry is new and gets
+  // an auto-reply instead of being dropped as a duplicate.
+  const prior = await store.findCanaryLead(source.id, phone);
   if (prior) await store.deleteLead(prior);
 
   const secret = ctx.env("CANARY_SECRET");
-  const body: Record<string, unknown> = { source_key: sourceKey, name: CANARY_LEAD_NAME, phone, consent: true };
+  const body: Record<string, unknown> = {
+    source_key: source.public_key,
+    name: CANARY_LEAD_NAME,
+    phone,
+    consent: true,
+  };
   if (secret) body.turnstile_token = canaryTurnstileToken(secret);
 
   const started = ctx.now();
@@ -215,7 +260,7 @@ async function runProbe(job: Job, ctx: JobContext, deps: CanaryDeps, store: Cana
   const leadId = out.lead_id;
   if (out.duplicate === true) return fail("the canary enquiry was treated as a duplicate", leadId);
 
-  const deadline = started.getTime() + AUTO_REPLY_DEADLINE_MS;
+  const deadline = started.getTime() + CHECK_WINDOW_MS;
   for (;;) {
     const lead = await store.autoReply(leadId);
     if (!lead) return fail("the canary lead disappeared after the post", leadId);
@@ -226,7 +271,7 @@ async function runProbe(job: Job, ctx: JobContext, deps: CanaryDeps, store: Cana
       return { ok: true, leadId, secondsToAutoReply: seconds, postMs };
     }
     const left = deadline - ctx.now().getTime();
-    if (left <= 0) return fail("no auto-reply recorded within 60 s", leadId);
+    if (left <= 0) return fail(`no auto-reply recorded within ${CHECK_WINDOW_MS / 1000} s of the enquiry`, leadId);
     await deps.sleep(Math.min(POLL_MS, left));
   }
 }

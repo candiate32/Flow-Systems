@@ -1,6 +1,6 @@
 -- Spec 004, slice E: delete_lead and the canary org.
 begin;
-select plan(27);
+select plan(34);
 
 -- Fixtures (as postgres, RLS bypassed) ------------------------------------------
 insert into public.orgs (id, name, slug)
@@ -90,31 +90,60 @@ select col_default_is('public', 'orgs', 'is_canary', 'false', 'orgs.is_canary de
 -- Clear any canary a developer marked locally, so this test controls the only one.
 update public.orgs set is_canary = false where is_canary;
 
-update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000001';
+-- Ops Org still has a real lead ('Stays'), so it can't become the canary.
+select throws_ok(
+  $$ update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000001' $$,
+  '23514', null, 'an org with real leads cannot become the canary');
+
+-- Other Org has no leads.
+update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000002';
 select results_eq(
   $$ select kind, status, idempotency_key from public.jobs
-      where org_id = 'e0000000-0000-4000-8000-000000000001' and kind = 'canary' $$,
+      where org_id = 'e0000000-0000-4000-8000-000000000002' and kind = 'canary' $$,
   $$ values ('canary'::text, 'queued'::text,
-             'canary:e0000000-0000-4000-8000-000000000001:' || to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24')) $$,
+             'canary:e0000000-0000-4000-8000-000000000002:' || to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24')) $$,
   'marking an org as the canary queues its first canary job, keyed by the hour');
 select ok((select run_at <= now() from public.jobs
-            where org_id = 'e0000000-0000-4000-8000-000000000001' and kind = 'canary'),
+            where org_id = 'e0000000-0000-4000-8000-000000000002' and kind = 'canary'),
   'the first canary job is due now');
 
-update public.orgs set is_canary = true, name = 'Ops Org Renamed' where id = 'e0000000-0000-4000-8000-000000000001';
-update public.orgs set is_canary = false where id = 'e0000000-0000-4000-8000-000000000001';
-update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000001';
-select is((select count(*) from public.jobs where org_id = 'e0000000-0000-4000-8000-000000000001' and kind = 'canary'),
+-- The canary's own leads (named Flow Canary) don't stop it being marked again.
+insert into public.leads (org_id, name, phone_e164, consent_at)
+values ('e0000000-0000-4000-8000-000000000002', 'Flow Canary', '+916000000001', now());
+update public.orgs set is_canary = true, name = 'Other Org Renamed' where id = 'e0000000-0000-4000-8000-000000000002';
+update public.orgs set is_canary = false where id = 'e0000000-0000-4000-8000-000000000002';
+select lives_ok(
+  $$ update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000002' $$,
+  'an org whose only leads are canary leads can be marked again');
+select is((select count(*) from public.jobs where org_id = 'e0000000-0000-4000-8000-000000000002' and kind = 'canary'),
   1::bigint, 're-marking within the hour queues no second canary job');
 
+insert into public.orgs (id, name, slug)
+values ('e0000000-0000-4000-8000-000000000004', 'Fourth', 'ops-fourth-org');
 select throws_ok(
-  $$ update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000002' $$,
+  $$ update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000004' $$,
   '23505', null, 'a second canary org is refused');
 select throws_ok(
   $$ insert into public.orgs (name, slug, is_canary) values ('Third', 'ops-third-org', true) $$,
   '23505', null, 'inserting a second canary org is refused');
 
-update public.orgs set is_canary = false where id = 'e0000000-0000-4000-8000-000000000001';
+-- start_canary says what it did.
+delete from vault.secrets where name in ('run_jobs_url', 'run_jobs_secret');
+select is(private.start_canary('e0000000-0000-4000-8000-000000000001'), 'not the canary',
+  'start_canary on an org that is not the canary queues nothing');
+select is((select count(*) from public.jobs where org_id = 'e0000000-0000-4000-8000-000000000001' and kind = 'canary'),
+  0::bigint, '... and really queued nothing');
+select is(private.start_canary('e0000000-0000-4000-8000-000000000002'), 'missing vault secret',
+  'start_canary reports when Vault lacks run_jobs_url / run_jobs_secret');
+select vault.create_secret('http://127.0.0.1:1/functions/v1/run-jobs', 'run_jobs_url');
+select vault.create_secret('test-secret', 'run_jobs_secret');
+select is(private.start_canary('e0000000-0000-4000-8000-000000000002'), 'already scheduled',
+  'start_canary reports a canary already queued this hour');
+delete from public.jobs where org_id = 'e0000000-0000-4000-8000-000000000002' and kind = 'canary';
+select is(private.start_canary('e0000000-0000-4000-8000-000000000002'), 'scheduled',
+  'start_canary queues a canary when none is queued');
+
+update public.orgs set is_canary = false where id = 'e0000000-0000-4000-8000-000000000002';
 insert into public.orgs (id, name, slug, is_canary)
 values ('e0000000-0000-4000-8000-000000000003', 'New Canary', 'ops-new-canary', true);
 select is((select count(*) from public.jobs where org_id = 'e0000000-0000-4000-8000-000000000003' and kind = 'canary'),
@@ -123,7 +152,7 @@ select is((select count(*) from public.jobs where org_id = 'e0000000-0000-4000-8
 set local role service_role;
 select lives_ok(
   $$ update public.orgs set is_canary = false where id = 'e0000000-0000-4000-8000-000000000003';
-     update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000002' $$,
+     update public.orgs set is_canary = true where id = 'e0000000-0000-4000-8000-000000000004' $$,
   'service_role (onboard-org) can mark an org as the canary');
 reset role;
 

@@ -27,23 +27,48 @@ revoke execute on function private.canary_idempotency_key(uuid, timestamptz) fro
 
 -- Queues a canary job for the org now, unless one is already queued for this
 -- hour. Each canary run queues the next one an hour later, so this only starts
--- the chain.
+-- the chain (or restarts it: docs/runbook.md, "The canary alerts"). Returns
+-- what happened:
+--   'scheduled'             a canary job was queued;
+--   'already scheduled'     one was already queued for this hour;
+--   'missing vault secret'  queued or not, nothing will run it: run_jobs_url or
+--                           run_jobs_secret is missing from Vault;
+--   'not the canary'        the org isn't marked is_canary; nothing queued.
 create function private.start_canary(org uuid)
-returns void
-language sql
+returns text
+language plpgsql
 volatile
 set search_path = ''
 as $$
+declare
+  queued integer;
+begin
+  if not exists (select 1 from public.orgs o where o.id = org and o.is_canary) then
+    return 'not the canary';
+  end if;
   insert into public.jobs (org_id, kind, run_at, idempotency_key)
   values (org, 'canary', now(), private.canary_idempotency_key(org, now()))
   on conflict (idempotency_key) do nothing;
+  get diagnostics queued = row_count;
+  if (select count(distinct s.name) from vault.decrypted_secrets s
+       where s.name in ('run_jobs_url', 'run_jobs_secret') and coalesce(s.decrypted_secret, '') <> '') < 2 then
+    return 'missing vault secret';
+  end if;
+  return case when queued = 1 then 'scheduled' else 'already scheduled' end;
+end;
 $$;
 revoke execute on function private.start_canary(uuid) from public, anon, authenticated;
 
 -- Marking an org as the canary (onboard-org with "is_canary": true) starts the
 -- chain. Unmarking it ends the chain: the next canary job sees the org is no
--- longer the canary, cancels itself and queues nothing. Security definer
--- because onboard-org writes as service_role, which has no access to `private`.
+-- longer the canary, cancels itself and queues nothing.
+--
+-- Only an org without real leads may become the canary: the canary posts and
+-- deletes leads there every hour. Its own leads are named 'Flow Canary'
+-- (run-jobs/canary.ts), so re-marking an old canary org still works.
+--
+-- Security definer because onboard-org writes as service_role, which has no
+-- access to `private`.
 create function private.orgs_start_canary()
 returns trigger
 language plpgsql
@@ -51,6 +76,10 @@ security definer
 set search_path = ''
 as $$
 begin
+  if exists (select 1 from public.leads l where l.org_id = new.id and l.name <> 'Flow Canary') then
+    raise exception 'org % has leads, so it cannot be the canary; use an org of its own', new.slug
+      using errcode = 'check_violation';
+  end if;
   perform private.start_canary(new.id);
   return new;
 end;
@@ -77,6 +106,9 @@ select private.start_canary(o.id) from public.orgs o where o.is_canary;
 -- Also removes events about the lead that carry its id only in the payload
 -- (owner alerts, job events written without a lead_id). Owner-alert messages
 -- have no lead_id and store no lead details (body is null), so they stay.
+--
+-- The deletes and the audit_log row run in the caller's single transaction (a
+-- function call is one statement): either all of them happen or none does.
 --
 -- Security invoker: only service_role may execute it, and service_role
 -- already has delete rights on these tables.

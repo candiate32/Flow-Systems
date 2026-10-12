@@ -9,10 +9,10 @@ import type { Job } from "../_shared/jobs.ts";
 import { FakeWhatsAppProvider } from "../_shared/whatsapp.ts";
 import { handler as ingest } from "../ingest-form/index.ts";
 import {
-  AUTO_REPLY_DEADLINE_MS,
   canary,
   canaryIdempotencyKey,
   type CanaryStore,
+  CHECK_WINDOW_MS,
   makeCanaryHandler,
   supabaseCanaryStore,
   syntheticCanaryPhone,
@@ -25,8 +25,12 @@ const ORG = "c0000000-0000-4000-8000-000000000001";
 const NOW = new Date("2026-10-11T05:30:00.000Z");
 const URL_ = "https://example.test/functions/v1/ingest-form";
 
+const SOURCE = "c0000000-0000-4000-8000-0000000000f1";
+
 type MemLead = {
   id: string;
+  name: string;
+  sourceId: string;
   phone: string;
   createdAt: Date;
   first_auto_reply_at: string | null;
@@ -35,7 +39,7 @@ type MemLead = {
 
 class MemoryStore implements CanaryStore {
   isCanary = true;
-  webForm: string | null = "canary-form";
+  form: { id: string; public_key: string } | null = { id: SOURCE, public_key: "canary-form" };
   leads = new Map<string, MemLead>();
   enqueued: { orgId: string; runAt: Date }[] = [];
   deleted: string[] = [];
@@ -48,22 +52,27 @@ class MemoryStore implements CanaryStore {
     this.enqueued.push({ orgId, runAt });
     return Promise.resolve();
   }
-  leadsCreatedBefore(_orgId: string, before: Date, limit: number) {
+  canaryNamedLeadsBefore(sourceId: string, before: Date, limit: number) {
     if (this.failCleanup) return Promise.reject(new Error("db down"));
     return Promise.resolve(
-      [...this.leads.values()].filter((l) => l.createdAt < before).slice(0, limit).map((l) => l.id),
+      [...this.leads.values()]
+        .filter((l) => l.sourceId === sourceId && l.name === "Flow Canary" && l.createdAt < before)
+        .slice(0, limit).map((l) => ({ id: l.id, phone: l.phone })),
     );
   }
-  findLead(_orgId: string, phone: string) {
-    return Promise.resolve([...this.leads.values()].find((l) => l.phone === phone)?.id ?? null);
+  findCanaryLead(sourceId: string, phone: string) {
+    return Promise.resolve(
+      [...this.leads.values()].find((l) => l.sourceId === sourceId && l.name === "Flow Canary" && l.phone === phone)
+        ?.id ?? null,
+    );
   }
   deleteLead(leadId: string) {
     this.deleted.push(leadId);
     this.leads.delete(leadId);
     return Promise.resolve();
   }
-  webFormKey() {
-    return Promise.resolve(this.webForm);
+  webForm() {
+    return Promise.resolve(this.form);
   }
   autoReply(leadId: string) {
     const l = this.leads.get(leadId);
@@ -107,6 +116,8 @@ function bench(opts: {
       const enquiryAt = clock.t.toISOString();
       store.leads.set(leadId, {
         id: leadId,
+        name: body.name as string,
+        sourceId: SOURCE,
         phone: body.phone as string,
         createdAt: clock.t,
         first_auto_reply_at: null,
@@ -213,27 +224,29 @@ Deno.test("canary: healthy run posts a fake enquiry, sees the auto-reply, queues
   assertEquals(b.store.enqueued, [{ orgId: ORG, runAt: new Date(NOW.getTime() + 60 * MIN) }]);
   assertEquals(b.alerts, []);
   assertEquals(b.events.map((e) => e.type), ["canary_passed"]);
-  assertEquals(b.events[0].payload.lead_id, b.leadId());
+  assertEquals(b.events[0].payload.probe_lead_id, b.leadId());
+  assertEquals(b.events[0].payload.lead_id, undefined, "not lead_id: the result outlives the lead");
   assertEquals(b.events[0].payload.seconds_to_auto_reply, 1.5);
 });
 
-Deno.test("canary: waits for an auto-reply that lands within 60 s", async () => {
-  const b = bench({ replyAfterMs: 45_000 });
+Deno.test("canary: waits for an auto-reply that lands within the check window", async () => {
+  const b = bench({ replyAfterMs: 30_000 });
   await b.handler(canaryJob(), b.ctx);
   assertEquals(b.alerts, []);
   assertEquals(b.events.map((e) => e.type), ["canary_passed"]);
-  assertEquals(b.events[0].payload.seconds_to_auto_reply, 45);
+  assertEquals(b.events[0].payload.seconds_to_auto_reply, 30);
   assert(b.sleeps.length > 1, "polled");
 });
 
-Deno.test("canary: alerts ops when no auto-reply is recorded within 60 s, and stops waiting at 60 s", async () => {
+Deno.test("canary: alerts ops when no auto-reply is recorded, and stops waiting in time for pg_net's 55 s", async () => {
   const b = bench({ replyAfterMs: null });
   const outcome = await b.handler(canaryJob(), b.ctx);
   assertEquals(outcome, undefined, "the job is done; the next canary is already queued");
-  assertEquals(b.alerts, ["canary: no auto-reply recorded within 60 s"]);
+  assertEquals(b.alerts, ["canary: no auto-reply recorded within 40 s of the enquiry"]);
   assertEquals(b.events.map((e) => e.type), ["canary_failed"]);
-  assertEquals(b.events[0].payload.lead_id, b.leadId());
-  assertEquals(b.clock.t.getTime() - NOW.getTime(), AUTO_REPLY_DEADLINE_MS, "waited exactly until the deadline");
+  assertEquals(b.events[0].payload.probe_lead_id, b.leadId());
+  assertEquals(b.clock.t.getTime() - NOW.getTime(), CHECK_WINDOW_MS, "waited exactly until the window closed");
+  assert(CHECK_WINDOW_MS < 55_000);
   assertEquals(b.store.enqueued.length, 1);
 });
 
@@ -286,6 +299,8 @@ Deno.test("canary: with CANARY_PHONE it enquires from that number, deleting last
   const b = bench({ env: { WHATSAPP_PROVIDER: "some-bsp", CANARY_PHONE: "98450 12345" } });
   b.store.leads.set("last-hour", {
     id: "last-hour",
+    name: "Flow Canary",
+    sourceId: SOURCE,
     phone: "+919845012345",
     createdAt: new Date(NOW.getTime() - 60 * MIN),
     first_auto_reply_at: null,
@@ -297,22 +312,70 @@ Deno.test("canary: with CANARY_PHONE it enquires from that number, deleting last
   assertEquals(b.alerts, []);
 });
 
-Deno.test("canary: deletes canary leads older than 7 days, keeps newer ones", async () => {
+const DAY = 24 * 60 * MIN;
+
+function addLead(
+  b: ReturnType<typeof bench>,
+  id: string,
+  l: { ageDays: number; name?: string; sourceId?: string; phone?: string },
+) {
+  b.store.leads.set(id, {
+    id,
+    name: l.name ?? "Flow Canary",
+    sourceId: l.sourceId ?? SOURCE,
+    phone: l.phone ?? `+91600000${String(b.store.leads.size).padStart(4, "0")}`,
+    createdAt: new Date(NOW.getTime() - l.ageDays * DAY),
+    first_auto_reply_at: null,
+    last_enquiry_at: NOW.toISOString(),
+  });
+}
+
+Deno.test("canary: deletes its own leads older than 7 days, keeps newer ones", async () => {
   const b = bench();
-  const day = 24 * 60 * MIN;
-  for (const [id, ageDays] of [["old-1", 8], ["old-2", 7.01], ["new", 6.9]] as const) {
-    b.store.leads.set(id, {
-      id,
-      phone: `+9160000000${id.length}`,
-      createdAt: new Date(NOW.getTime() - ageDays * day),
-      first_auto_reply_at: null,
-      last_enquiry_at: NOW.toISOString(),
-    });
-  }
+  addLead(b, "old-1", { ageDays: 8 });
+  addLead(b, "old-2", { ageDays: 7.01 });
+  addLead(b, "new", { ageDays: 6.9 });
   await b.handler(canaryJob(), b.ctx);
   assertEquals(b.store.deleted, ["old-1", "old-2"]);
   assert(b.store.leads.has("new"));
   assertEquals(b.events.map((e) => e.type), ["canary_leads_deleted", "canary_passed"]);
+});
+
+Deno.test("canary: never deletes a lead it didn't create, however old", async () => {
+  const b = bench();
+  addLead(b, "real-person", { ageDays: 30, name: "Asha Rao", phone: "+919845012345" });
+  addLead(b, "real-same-name", { ageDays: 30, phone: "+919845054321" }); // named Flow Canary, real number
+  addLead(b, "other-form", { ageDays: 30, sourceId: "another-source" });
+  addLead(b, "real-synthetic-looking", { ageDays: 30, name: "Ravi", phone: "+916000123456" });
+  addLead(b, "canary-old", { ageDays: 30 });
+  await b.handler(canaryJob(), b.ctx);
+  assertEquals(b.store.deleted, ["canary-old"]);
+  for (const id of ["real-person", "real-same-name", "other-form", "real-synthetic-looking"]) {
+    assert(b.store.leads.has(id), id);
+  }
+});
+
+Deno.test("canary: with CANARY_PHONE, its old leads from that number are deleted too", async () => {
+  const b = bench({ env: { CANARY_PHONE: "98450 12345" } });
+  addLead(b, "canary-old-fixed", { ageDays: 9, phone: "+919845012345" });
+  addLead(b, "not-canary-number", { ageDays: 9, phone: "+919845099999" });
+  await b.handler(canaryJob(), b.ctx);
+  assertEquals(b.store.deleted, ["canary-old-fixed"]);
+});
+
+Deno.test("canary: doesn't delete a real lead that has the number it is about to use", async () => {
+  const b = bench({ env: { CANARY_PHONE: "98450 12345" } });
+  addLead(b, "real", { ageDays: 0, name: "Asha Rao", phone: "+919845012345" });
+  await b.handler(canaryJob(), b.ctx);
+  assertEquals(b.store.deleted, []);
+});
+
+Deno.test("canary: alerts ops without posting when the canary org has no web form", async () => {
+  const b = bench();
+  b.store.form = null;
+  await b.handler(canaryJob(), b.ctx);
+  assertEquals(b.posted, []);
+  assertEquals(b.alerts, ["canary: the canary org has no web_form source"]);
 });
 
 Deno.test("canary: a failed cleanup is recorded and the check still runs", async () => {
@@ -348,7 +411,8 @@ dbTest(
       .insert({ name: "Canary Test Org", slug, is_canary: true }).select("id").single();
     if (error) throw error;
     try {
-      await db.from("sources").insert({ org_id: org.id, kind: "web_form", name: "Canary form", public_key: slug });
+      const { data: source } = await db.from("sources")
+        .insert({ org_id: org.id, kind: "web_form", name: "Canary form", public_key: slug }).select("id").single();
 
       // The trigger queued the first canary job, keyed the way canary.ts keys it.
       const { data: first } = await db.from("jobs").select("*").eq("org_id", org.id).eq("kind", "canary");
@@ -358,6 +422,7 @@ dbTest(
       // A canary lead from last week, with a message and an event.
       const { data: old } = await db.from("leads").insert({
         org_id: org.id,
+        source_id: source!.id,
         name: "Flow Canary",
         phone_e164: "+916000999999",
         consent_at: "2000-12-01T00:00:00Z",
@@ -371,6 +436,15 @@ dbTest(
         provider: "fake",
       });
       await db.from("events").insert({ org_id: org.id, lead_id: old!.id, type: "lead_created" });
+      // And a real person who enquired on the canary's form last week: never deleted.
+      const { data: real } = await db.from("leads").insert({
+        org_id: org.id,
+        source_id: source!.id,
+        name: "Asha Rao",
+        phone_e164: "+919845012345",
+        consent_at: "2000-12-01T00:00:00Z",
+        created_at: "2000-12-01T00:00:00Z",
+      }).select("id").single();
 
       // Run it on the drill clock (2001) so only test jobs are claimed.
       await db.from("jobs").update({ run_at: T0.toISOString() }).eq("id", first![0].id);
@@ -406,7 +480,7 @@ dbTest(
       const { data: events } = await db.from("events").select("type, payload").eq("org_id", org.id)
         .eq("payload->>job_id", first![0].id).order("id");
       assertEquals(events!.map((e) => e.type), ["canary_leads_deleted", "canary_passed"]);
-      const leadId = (events![1].payload as { lead_id: string }).lead_id;
+      const leadId = (events![1].payload as { probe_lead_id: string }).probe_lead_id;
 
       // The lead came through ingest-form and was acknowledged.
       const { data: lead } = await db.from("leads").select("name, phone_e164, first_auto_reply_at").eq("id", leadId)
@@ -428,6 +502,7 @@ dbTest(
       assertEquals((await db.from("messages").select("id").eq("lead_id", old!.id)).data, []);
       const { data: audit } = await db.from("audit_log").select("action").eq("target", `lead:${old!.id}`);
       assertEquals(audit, [{ action: "lead.deleted" }]);
+      assertEquals((await db.from("leads").select("id").eq("id", real!.id)).data, [{ id: real!.id }], "real lead kept");
 
       // Second run with the provider down: no auto-reply, so ops are alerted.
       await db.from("jobs").update({ run_at: next.toISOString() }).eq("org_id", org.id).eq("status", "queued");
@@ -469,7 +544,7 @@ dbTest(
       assertEquals(alerts.length, 1);
       assertEquals(alerts[0].to, "+919000000002");
       assertEquals(alerts[0].params[0], "canary");
-      assertEquals(alerts[0].params[3], "canary: no auto-reply recorded within 60 s");
+      assertEquals(alerts[0].params[3], "canary: no auto-reply recorded within 40 s of the enquiry");
     } finally {
       // Cascades to its sources, leads, messages, events, jobs and audit rows.
       await db.from("orgs").delete().eq("id", org.id);

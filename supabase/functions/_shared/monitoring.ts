@@ -40,9 +40,11 @@ export type MonitorOptions = {
 
 export type CaptureException = (err: unknown, context?: MonitoringContext) => Promise<void>;
 
-// An Indian mobile (+91 optional, 10 digits from 6-9) that is not part of a
-// longer token such as a UUID.
-const INDIAN_MOBILE = /(?<![\w-])(?:\+?91[\s-]?)?[6-9]\d{9}(?![\w-])/g;
+// An Indian mobile as people write it: 10 digits starting 6-9, optionally
+// grouped with single spaces or hyphens, optionally after +91, 0091, 91 or 0.
+// Not when it is part of a longer token, such as a UUID's last group or a
+// longer number. An escape like \n counts as a boundary: this runs on JSON text.
+const INDIAN_MOBILE = /(?:(?<![\w-])|(?<=\\[nrt]))(?:(?:\+|00)\s?91[\s-]?|91[\s-]?|0)?[6-9](?:[\s-]?\d){9}(?!\d)/g;
 
 /** Replaces Indian mobile numbers anywhere in a JSON-safe value with "[phone]". */
 export function scrubPhones<T>(value: T): T {

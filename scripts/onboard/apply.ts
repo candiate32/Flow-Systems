@@ -11,6 +11,7 @@
 // deno-lint-ignore no-import-prefix -- scripts share the functions' full specifiers
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type { Database, Json } from "../../supabase/functions/_shared/database.types.ts";
+import { CANARY_LEAD_NAME } from "../../supabase/functions/_shared/canary.ts";
 import { must } from "../../supabase/functions/_shared/db.ts";
 import type { ConfigError, Locate, OrgConfig } from "./config.ts";
 
@@ -63,6 +64,13 @@ export async function planOnboarding(db: Db, config: OrgConfig, locate: Locate):
     const canaries = must(await db.from("orgs").select("id, slug").eq("is_canary", true), "find canary org");
     const other = canaries?.find((o) => o.id !== orgId);
     if (other) err("is_canary", `org ${other.slug} is already the canary; there can be only one`);
+    // The canary posts and deletes leads in its org every hour: it needs an org of its own.
+    if (existing && !existing.is_canary) {
+      const { count, error } = await db.from("leads").select("id", { count: "exact", head: true })
+        .eq("org_id", orgId).neq("name", CANARY_LEAD_NAME);
+      if (error) throw new Error(`count leads: ${error.message}`);
+      if (count) err("is_canary", `this org has ${count} lead(s), so it can't be the canary; use an org of its own`);
+    }
   }
 
   const keys = config.sources.map((s) => s.public_key);

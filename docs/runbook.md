@@ -38,7 +38,7 @@ Set these with `npx supabase secrets set NAME=value --project-ref <ref>`. Both f
 | `RUN_JOBS_SECRET` | yes | A long random value: `openssl rand -hex 32`. `run-jobs` answers 401 to any call without it in the `x-run-jobs-secret` header. Vault's `run_jobs_secret` (1.3) must be the same value. |
 | `OPS_ALERT_PHONE` | yes | The ops phone (Mourya's) for `ops_alert` messages, for example `+919845012345`. When it is unset or invalid, alerts are only written to `events` as `ops_alert_skipped`. |
 | `INGEST_FORM_URL` | for the canary | `https://<ref>.supabase.co/functions/v1/ingest-form` |
-| `CANARY_SECRET` | when Turnstile is on | At least 24 random characters (`openssl rand -hex 32`). The canary can't solve a Turnstile challenge, so it sends `canary:<CANARY_SECRET>` as its token and ingest-form lets it through. Without it the canary fails the spam check whenever `TURNSTILE_SECRET` is set. |
+| `CANARY_SECRET` | when Turnstile is on | At least 24 random characters (`openssl rand -hex 32`). The canary can't solve a Turnstile challenge, so it sends `canary:<CANARY_SECRET>` as its token. ingest-form accepts that token only on the canary org's own form, and only from `CANARY_PHONE` when that is set; anywhere else it is a failed spam check (403). Without it the canary fails the spam check whenever `TURNSTILE_SECRET` is set. |
 | `CANARY_PHONE` | with a real provider | A WhatsApp number ops own that agreed to receive the canary's acknowledgement every hour. Without it the canary uses a made-up number, which it only does with the fake provider. |
 | `WHATSAPP_PROVIDER` | after the spike | Unset or `fake` uses the fake provider, which sends nothing. |
 | `TURNSTILE_SECRET` | for real traffic | Cloudflare Turnstile secret. Unset skips the spam check, which is only allowed with the fake provider. |
@@ -84,9 +84,11 @@ A 401 means Vault's `run_jobs_secret` and the `RUN_JOBS_SECRET` function secret 
 
 ### 1.5 The canary
 
-The canary is one org (at most one) with `is_canary = true`. Every hour a `canary` job posts a fake enquiry to its form through `INGEST_FORM_URL` and checks that the auto-reply was recorded within 60 seconds. If not, or if the post fails, ops get an alert. It deletes its own leads after 7 days.
+The canary is one org (at most one) with `is_canary = true`, used for nothing else. Every hour a `canary` job posts a fake enquiry, named "Flow Canary", to the org's web form through `INGEST_FORM_URL`. It checks that the auto-reply was recorded: within 40 seconds of the enquiry, and no more than 60 seconds after it. If not, or if the post fails, ops get an alert. The whole check fits inside the 55 seconds `pg_net` waits for `run-jobs`.
 
-1. Write `onboarding/canary.json`: `"is_canary": true`, one `web_form` source, and `"owner_alert_phones": []` so nobody gets an owner alert every hour.
+The canary deletes only its own leads, once they are 7 days old: leads from the canary org's form, named "Flow Canary", from `CANARY_PHONE` or a made-up `+91 6000…` number. Any other lead in the canary org is never touched. Even so, give the canary an org of its own: onboard-org and the database refuse to mark an org that already has other leads.
+
+1. Write `onboarding/canary.json` for a new org: `"is_canary": true`, one `web_form` source, and `"owner_alert_phones": []` so nobody gets an owner alert every hour. Don't reuse a studio's org.
 2. Run `deno run -A scripts/onboard-org.ts onboarding/canary.json` (section 2). Marking the org as the canary queues the first canary job straight away.
 3. Set `INGEST_FORM_URL`, and `CANARY_SECRET` / `CANARY_PHONE` as the table in 1.2 says.
 4. After a minute or two:
@@ -96,7 +98,7 @@ The canary is one org (at most one) with `is_canary = true`. Every hour a `canar
     where type like 'canary_%' order by created_at desc limit 5;
    ```
 
-   You want `canary_passed`, with `seconds_to_auto_reply`.
+   You want `canary_passed`, with `seconds_to_auto_reply`. `probe_lead_id` is the canary lead it created; the event outlives that lead.
 
 To stop the canary, set `"is_canary": false` and run onboard-org again. The next canary job cancels itself and queues no more.
 
@@ -265,26 +267,34 @@ The runner takes them 10 at a time, for up to 40 seconds each minute.
 The alert's error starts with `canary:`. Each failure is also a `canary_failed` event:
 
 ```sql
-select created_at, payload->>'reason' as reason, payload->>'lead_id' as lead_id
+select created_at, type, payload->>'reason' as reason, payload->>'probe_lead_id' as probe_lead_id
   from events where type in ('canary_failed', 'canary_passed') order by created_at desc limit 10;
 ```
 
 | Reason | Meaning | What to do |
 |---|---|---|
-| `no auto-reply recorded within 60 s` | The enquiry was saved but the acknowledgement didn't go out in time. Real leads are affected. | Section 3. |
+| `no auto-reply recorded within 40 s of the enquiry` | The enquiry was saved but the acknowledgement didn't go out with it. ingest-form sends it before answering, and the next try is a retry job a minute later, past the 60-second promise. Real leads are affected. | Section 3. |
 | `auto-reply took N s, over 60 s` | The acknowledgement went out, late (usually on a retry). | Section 3; check the provider's latency. |
 | `post to ingest-form failed: …` or `ingest-form returned 5xx` | ingest-form is down or erroring. Real enquiries are failing too. | Check the function's logs in the dashboard (Edge Functions, ingest-form, Logs) and Sentry. Redeploy if a bad deploy caused it. |
-| `ingest-form returned 403` | The canary failed the spam check. | Set `CANARY_SECRET` (1.2), at least 24 characters. |
+| `ingest-form returned 403` | The canary failed the spam check. | Set `CANARY_SECRET` (1.2), at least 24 characters, the same for both functions. If it is set, check that the org is still marked `is_canary` and that `CANARY_PHONE` is the same number for both functions. The refusal's reason is in the `turnstile_failed` event. |
 | `ingest-form returned 400: … source_key …` | The canary org's form key is wrong. | Check the canary's onboarding file. |
 | `INGEST_FORM_URL is not set` | Setup. | Set it (1.2). |
 | `CANARY_PHONE must be set …` | A real provider is configured. | Set `CANARY_PHONE` (1.2). |
-| `the canary enquiry was treated as a duplicate` | Should not happen: the canary deletes its earlier lead first. | Look at the lead in the event; report it as a bug. |
+| `the canary enquiry was treated as a duplicate` | A lead the canary didn't create has the canary's number in the canary org (it never deletes those), or something else is wrong. | Look at that lead (`probe_lead_id`). If it isn't a canary lead, move it out or delete it by hand. |
 
 If canary checks stop altogether (no `canary_*` event for over an hour), the chain broke, usually because a canary job went dead. Restart it:
 
 ```sql
-select private.start_canary(id) from orgs where is_canary;
+select o.slug, private.start_canary(o.id) as result from orgs o where o.is_canary;
 ```
+
+`result` is one of:
+
+- `scheduled`: a canary job was queued and runs within a minute.
+- `already scheduled`: one is already queued for this hour. If it doesn't run, the job runner itself is stuck (section 1.4).
+- `missing vault secret`: `run_jobs_url` or `run_jobs_secret` is missing from Vault, so nothing calls `run-jobs` at all. Fix 1.3 first; the queued job then runs.
+
+No row means no org is marked as the canary (1.5).
 
 ## 8. A client asks for data deletion
 
@@ -299,7 +309,7 @@ A lead (or the studio on the lead's behalf) asks us to delete their data. Lead d
     where l.phone_e164 = '+91XXXXXXXXXX';
    ```
 
-3. **Delete it** with `delete_lead`, which removes the lead, its messages, its events (including events that mention it only by id) and its jobs, and writes an `audit_log` row:
+3. **Delete it** with `delete_lead`, which removes the lead, its messages, its events (including events that mention it only by id) and its jobs, and writes an `audit_log` row, all in one transaction (it all happens or none of it does):
 
    ```sql
    select public.delete_lead('<lead id>');

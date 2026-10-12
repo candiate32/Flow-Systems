@@ -12,7 +12,7 @@ import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { handleOptions, json } from "../_shared/http.ts";
 import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
-import { isCanaryToken } from "../_shared/canary.ts";
+import { type CanaryPassConfig, type CanaryVerdict, canaryVerdict, isCanaryToken } from "../_shared/canary.ts";
 import { captureException } from "../_shared/monitoring.ts";
 import {
   getWhatsAppProvider,
@@ -26,6 +26,8 @@ export type Deps = {
   provider: WhatsAppProvider;
   now: () => Date;
   verifyTurnstile: (token: string | null) => Promise<boolean>;
+  /** The hourly canary's pass (CANARY_SECRET, CANARY_PHONE); see _shared/canary.ts. */
+  canary?: CanaryPassConfig;
 };
 
 const TEMPLATE_LANGUAGE = "en";
@@ -124,10 +126,19 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const enquiry = parsed.value;
     log.add("enquiry_validated");
 
-    // 2. Spam check.
-    if (!(await deps.verifyTurnstile(enquiry.turnstileToken))) {
+    // 2. Spam check. The hourly canary sends canary:<CANARY_SECRET> instead of a
+    // Turnstile token; that passes only for the canary org's form (_shared/canary.ts).
+    let canary: CanaryVerdict = { kind: "not_canary" };
+    if (isCanaryToken(enquiry.turnstileToken, deps.canary?.secret)) {
+      const src = await findSource(db, enquiry.sourceKey).catch(() => null);
+      canary = canaryVerdict(deps.canary, enquiry.turnstileToken, src, enquiry.phone);
+    }
+    const spamOk = canary.kind === "not_canary"
+      ? await deps.verifyTurnstile(enquiry.turnstileToken)
+      : canary.kind === "allowed";
+    if (!spamOk) {
       orgId = (await findSource(db, enquiry.sourceKey).catch(() => null))?.org_id ?? null;
-      log.add("turnstile_failed");
+      log.add("turnstile_failed", canary.kind === "refused" ? { reason: canary.reason } : {});
       return withRequestId(json(403, { error: "Spam check failed. Please try again." }), requestId);
     }
     log.add("turnstile_passed");
@@ -286,13 +297,13 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 type SourceWithOrg = {
   id: string;
   org_id: string;
-  org: { name: string; owner_alert_phones: string[] };
+  org: { name: string; owner_alert_phones: string[]; is_canary: boolean };
 };
 
 async function findSource(db: Deps["db"], publicKey: string): Promise<SourceWithOrg | null> {
   const row = must(
     await db.from("sources")
-      .select("id, org_id, org:orgs!inner(name, owner_alert_phones)")
+      .select("id, org_id, org:orgs!inner(name, owner_alert_phones, is_canary)")
       .eq("public_key", publicKey)
       .maybeSingle(),
     "find source",
@@ -412,8 +423,6 @@ export function makeVerifyTurnstile(
   fetchFn: typeof fetch = fetch,
 ): Deps["verifyTurnstile"] {
   return async (token) => {
-    // The hourly canary (run-jobs/canary.ts) can't solve a challenge; it sends CANARY_SECRET instead.
-    if (isCanaryToken(token, env("CANARY_SECRET"))) return true;
     const secret = env("TURNSTILE_SECRET");
     if (!secret) {
       // Only the fake provider may run without spam protection; a real one would send WhatsApp to anyone.
@@ -450,6 +459,7 @@ if (import.meta.main) {
     provider: getWhatsAppProvider(env),
     now: () => new Date(),
     verifyTurnstile: makeVerifyTurnstile(env),
+    canary: { secret: env("CANARY_SECRET"), phone: env("CANARY_PHONE") },
   };
   Deno.serve((req) => handler(req, deps));
 }
