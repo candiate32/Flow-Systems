@@ -87,7 +87,9 @@ Built as (slice C):
 - A lead created by its first message gets an acknowledgement. Inside the 24-hour window of that message (measured from when it was sent, not when the webhook arrived) it is the session text; outside, it is the `enquiry_ack` template. `first_auto_reply_at` is set either way. It also gets follow-ups from the inbound time. An opt-out sends nothing, not even a confirmation.
 - Every echo moves `leads.last_human_reply_at` forward, and follow-ups are skipped when it is after their enquiry. `first_human_reply_at` stays set-once for metrics.
 - `failed` replaces `sent`; a later `delivered` or `read` wins over `failed` and clears its error.
-- Deleting a lead redacts the webhook rows routed to it. It also redacts rows that carry its phone but no lead, in its org or not routed to any org.
+- Deleting a lead redacts the webhook rows routed to it. It also redacts rows that carry its phone but no lead, in its org or not routed to any org. Rows not yet processed are closed as processed (outcome `deleted`), so a provider retry is a duplicate and can't recreate the lead.
+- A dead letter is reported once. Only the delivery whose atomic attempt count reaches 3 writes `webhook_event_failed` and alerts ops; later deliveries just get 200.
+- A late-delivered old message only answers enquiries up to its own time. An inbound or echo cancels only follow-ups whose `enquiry_at` is at or before the message time. An echo older than the lead's first enquiry sets no reply time. A late STOP is still honoured whatever its time, to err on the side of consent.
 
 Left for slice F (real provider):
 - One malformed event makes the whole delivery invalid: it is stored as one `invalid` row and none of its events are processed.
