@@ -291,7 +291,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
   await purgeTestJobs();
   const ids: string[] = [];
   try {
-    for (const kind of ["weekly_report", "canary"]) {
+    for (const kind of ["canary", "canary"]) {
       ids.push((await enqueueJob(db, {
         org_id: DEMO_ORG,
         kind,

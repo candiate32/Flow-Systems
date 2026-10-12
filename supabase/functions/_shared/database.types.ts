@@ -59,6 +59,12 @@ isOneToOne: false
       foreignKeyName: "events_lead_id_fkey"
       columns: ["lead_id"]
 isOneToOne: false
+      referencedRelation: "lead_response_metrics"
+      referencedColumns: ["lead_id"]
+    },{
+      foreignKeyName: "events_lead_id_fkey"
+      columns: ["lead_id"]
+isOneToOne: false
       referencedRelation: "leads"
       referencedColumns: ["id"]
     },{
@@ -82,6 +88,12 @@ isOneToOne: false
                   }
                   Relationships: [
                     {
+      foreignKeyName: "jobs_lead_id_fkey"
+      columns: ["lead_id"]
+isOneToOne: false
+      referencedRelation: "lead_response_metrics"
+      referencedColumns: ["lead_id"]
+    },{
       foreignKeyName: "jobs_lead_id_fkey"
       columns: ["lead_id"]
 isOneToOne: false
@@ -139,6 +151,12 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "jobs"
       referencedColumns: ["id"]
+    },{
+      foreignKeyName: "messages_lead_id_fkey"
+      columns: ["lead_id"]
+isOneToOne: false
+      referencedRelation: "lead_response_metrics"
+      referencedColumns: ["lead_id"]
     },{
       foreignKeyName: "messages_lead_id_fkey"
       columns: ["lead_id"]
@@ -250,7 +268,35 @@ isOneToOne: false
                 }
           }
           Views: {
-            [_ in never]: never
+            "lead_response_metrics": {
+                  Row: {
+                    "enquiry_at": string | null,"iso_week": string | null,"lead_id": string | null,"org_id": string | null,"replied_by_lead": boolean | null,"seconds_to_auto_reply": number | null,"seconds_to_first_human_reply": number | null,"week_start": string | null
+                  }
+                  ComputedFields: never
+                  Relationships: [
+                    {
+      foreignKeyName: "leads_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"lead_response_weekly": {
+                  Row: {
+                    "auto_replied_count": number | null,"human_replied_count": number | null,"human_reply_within_1h_count": number | null,"iso_week": string | null,"lead_count": number | null,"median_seconds_to_auto_reply": number | null,"median_seconds_to_first_human_reply": number | null,"org_id": string | null,"p90_seconds_to_auto_reply": number | null,"pct_human_reply_within_1h": number | null,"replied_by_lead_count": number | null,"week_end": string | null,"week_start": string | null
+                  }
+                  ComputedFields: never
+                  Relationships: [
+                    {
+      foreignKeyName: "leads_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                }
           }
           Functions: {
             "cancel_followups":
@@ -278,6 +324,9 @@ isOneToOne: false
         isOneToOne: false
         isSetofReturn: true
       } },
+"enqueue_weekly_reports":
+{ Args: { "p_as_of"?: string,"p_org_id"?: string }; Returns: string[]
+                           },
 "process_whatsapp_event":
 { Args: { "p_as_of"?: string,"p_event": Json,"p_source_id": string,"p_webhook_event_id": number }; Returns: Json
                            },
@@ -289,6 +338,9 @@ isOneToOne: false
                            },
 "schedule_followups":
 { Args: { "p_as_of"?: string,"p_jobs": Json,"p_lead_id": string,"p_reason": string }; Returns: Json
+                           },
+"weekly_report_data":
+{ Args: { "p_org_id": string,"p_week_start": string }; Returns: Json
                            }
           }
           Enums: {

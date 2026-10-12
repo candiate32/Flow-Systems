@@ -28,6 +28,8 @@ export type Deps = {
   /** The runner's clock: decides which jobs are due and when retries run. */
   now: () => Date;
   env: (k: string) => string | undefined;
+  /** HTTP for handlers that call other services (Resend). Defaults to the global fetch; tests inject a fake. */
+  fetch?: typeof fetch;
   /** Overrides the handler for a kind (tests). */
   handlers?: Partial<Record<JobKind, JobHandler>>;
 };
@@ -91,7 +93,9 @@ export async function runClaimedJobs(deps: Deps, opts: RunOptions = {}): Promise
       })
     ));
     for (const o of outcomes) summary[o === "error" ? "errors" : o]++;
-    if (jobs.length < batch) break;
+    // No early exit on a short round: a handler may have queued work that is
+    // due now (the weekly report queues its WhatsApp sends), and the next
+    // round runs it. The loop ends on an empty claim or the time budget.
   }
   return summary;
 }
@@ -136,6 +140,8 @@ function contextFor(deps: Deps): JobContext {
     db: deps.db,
     provider: deps.provider,
     now: deps.now,
+    env: deps.env,
+    fetch: deps.fetch ?? globalThis.fetch,
     addEvent: (job, type, payload) => addEvent(deps, job, type, payload),
   };
 }

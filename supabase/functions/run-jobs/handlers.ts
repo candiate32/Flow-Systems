@@ -7,8 +7,9 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { type Job, type JobKind, parseSendMessagePayload, PermanentJobError } from "../_shared/jobs.ts";
-import type { WhatsAppProvider } from "../_shared/whatsapp.ts";
+import { OWNER_TEMPLATES, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { followUp } from "./followup.ts";
+import { weeklyReport } from "./weekly_report.ts";
 
 export type JobOutcome =
   | { status: "done" }
@@ -19,6 +20,9 @@ export type JobContext = {
   db: SupabaseClient<Database>;
   provider: WhatsAppProvider;
   now: () => Date;
+  env: (k: string) => string | undefined;
+  /** For HTTP calls other than the WhatsApp provider (Resend). Tests inject a fake. */
+  fetch: typeof fetch;
   addEvent: (job: Job, type: string, payload?: Record<string, Json>) => Promise<void>;
 };
 
@@ -30,9 +34,10 @@ export type JobHandler = (job: Job, ctx: JobContext) => Promise<JobOutcome | voi
  * later status), and a retry that finds one does not send again.
  *
  * Recipients:
- * - `owner_alert` goes to one of the org's owner_alert_phones. The job's
- *   lead_id is the lead the alert is about (so deleting the lead removes the
- *   job); the message itself has no lead_id, as for inline owner alerts.
+ * - `owner_alert` and `weekly_summary` go to one of the org's
+ *   owner_alert_phones. An owner alert's lead_id is the lead the alert is
+ *   about (so deleting the lead removes the job); a weekly summary has none.
+ *   The message itself has no lead_id, as for inline owner alerts.
  * - every other template goes to the job's lead, at the phone the lead gave,
  *   only with consent and never after an opt-out.
  */
@@ -45,14 +50,14 @@ export const sendMessage: JobHandler = async (job, ctx) => {
     await db.from("messages").select("id, sent_at, created_at").eq("job_id", job.id).maybeSingle(),
     "find earlier send",
   );
-  const isOwnerAlert = p.template === "owner_alert";
+  const toOwner = OWNER_TEMPLATES.includes(p.template);
   let sentAt: string;
   if (prior) {
     // An earlier attempt sent it and then lost track (crash before the job was
     // settled). Its status may have moved on (delivered, read); it was sent.
     sentAt = prior.sent_at ?? prior.created_at;
   } else {
-    const refusal = isOwnerAlert ? await checkOwnerPhone(job, p.to, db) : await checkLeadRecipient(job, p.to, db);
+    const refusal = toOwner ? await checkOwnerPhone(job, p.to, db) : await checkLeadRecipient(job, p.to, db);
     if (refusal) return refusal;
 
     let providerMessageId: string;
@@ -75,7 +80,7 @@ export const sendMessage: JobHandler = async (job, ctx) => {
       const message = mustRow(
         await db.from("messages").insert({
           org_id: job.org_id,
-          lead_id: isOwnerAlert ? null : job.lead_id,
+          lead_id: toOwner ? null : job.lead_id,
           job_id: job.id,
           to_phone: p.to,
           direction: "outbound",
@@ -100,7 +105,7 @@ export const sendMessage: JobHandler = async (job, ctx) => {
     }
   }
 
-  if (p.first_auto_reply && job.lead_id && !isOwnerAlert) {
+  if (p.first_auto_reply && job.lead_id && !toOwner) {
     must(
       await db.from("leads")
         .update({ first_auto_reply_at: sentAt })
@@ -112,7 +117,11 @@ export const sendMessage: JobHandler = async (job, ctx) => {
 };
 
 /** Event names match the ones ingest-form writes for inline sends. */
-const SENT_EVENT: Partial<Record<string, string>> = { enquiry_ack: "ack_sent", owner_alert: "owner_alert_sent" };
+const SENT_EVENT: Partial<Record<string, string>> = {
+  enquiry_ack: "ack_sent",
+  owner_alert: "owner_alert_sent",
+  weekly_summary: "weekly_summary_sent",
+};
 
 /** Only message people who gave consent and have not opted out, at the number they gave. */
 async function checkLeadRecipient(job: Job, to: string, db: JobContext["db"]): Promise<JobOutcome | null> {
@@ -149,6 +158,6 @@ const notYet = (kind: JobKind): JobHandler => () => {
 export const defaultHandlers: Record<JobKind, JobHandler> = {
   send_message: sendMessage,
   followup: followUp,
-  weekly_report: notYet("weekly_report"),
+  weekly_report: weeklyReport,
   canary: notYet("canary"),
 };
