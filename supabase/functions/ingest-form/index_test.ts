@@ -287,26 +287,58 @@ dbTest("follow-ups: an enquiry at 14:00 IST queues three at 11:00 IST on day 1, 
   }
 });
 
-dbTest("follow-ups: a scheduling failure is logged and the enquiry still succeeds", async () => {
+// The real client, except that every RPC (schedule_followups among them) fails.
+const failingRpc = new Proxy(db, {
+  get(target, prop, receiver) {
+    if (prop === "rpc") return () => Promise.resolve({ data: null, error: { message: "rpc down" } });
+    return Reflect.get(target, prop, receiver);
+  },
+});
+
+dbTest("follow-ups: a scheduling failure is logged, alerts ops, and the enquiry still succeeds", async () => {
   const phone = uniquePhone();
   const provider = new FakeWhatsAppProvider();
-  // The real client, except that every RPC fails.
-  const failingRpc = new Proxy(db, {
-    get(target, prop, receiver) {
-      if (prop === "rpc") return () => Promise.resolve({ data: null, error: { message: "rpc down" } });
-      return Reflect.get(target, prop, receiver);
-    },
+  const res = await handler(post(form(phone.national)), {
+    ...deps(provider),
+    db: failingRpc,
+    env: (k) => (k === "OPS_ALERT_PHONE" ? "90000 00002" : undefined),
   });
-  const res = await handler(post(form(phone.national)), { ...deps(provider), db: failingRpc });
   const requestId = res.headers.get("X-Request-Id")!;
   try {
     assertEquals(res.status, 200);
     const body = await res.json();
     assertEquals(body.ack_sent, true);
     assertEquals((await followUpJobsFor(body.lead_id)).length, 0);
-    const failed = (await eventsFor(requestId)).filter((e) => e.type === "followups_schedule_failed");
+    const events = await eventsFor(requestId);
+    const failed = events.filter((e) => e.type === "followups_schedule_failed");
     assertEquals(failed.length, 1);
     assert((failed[0].payload as { error: string }).error.includes("rpc down"));
+
+    const ops = provider.sent.filter((s) => s.template === "ops_alert");
+    assertEquals(ops.length, 1);
+    assertEquals(ops[0].to, "+919000000002");
+    assertEquals(ops[0].params.slice(0, 3), ["followups_schedule", body.lead_id, "1"]);
+    assert(ops[0].params[3].includes("rpc down"), ops[0].params[3]);
+    const sent = events.filter((e) => e.type === "ops_alert_sent");
+    assertEquals(sent.map((e) => (e.payload as { provider_message_id: string }).provider_message_id), [
+      ops[0].providerMessageId,
+    ]);
+  } finally {
+    await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
+  }
+});
+
+dbTest("follow-ups: a scheduling failure without OPS_ALERT_PHONE logs a skipped ops alert", async () => {
+  const phone = uniquePhone();
+  const provider = new FakeWhatsAppProvider();
+  const res = await handler(post(form(phone.national)), { ...deps(provider), db: failingRpc });
+  const requestId = res.headers.get("X-Request-Id")!;
+  try {
+    assertEquals(res.status, 200);
+    await res.body?.cancel();
+    assertEquals(provider.sent.filter((s) => s.template === "ops_alert").length, 0);
+    const skipped = (await eventsFor(requestId)).filter((e) => e.type === "ops_alert_skipped");
+    assertEquals(skipped.map((e) => (e.payload as { reason: string }).reason), ["OPS_ALERT_PHONE is not set"]);
   } finally {
     await cleanup([phone.e164], [requestId], provider.sent.map((s) => s.providerMessageId));
   }

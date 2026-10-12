@@ -378,3 +378,144 @@ dbTest("a followup job with a bad payload or no lead is dead-lettered, not sent"
     await cleanup({ jobIds: ids, leadIds: [leadId] });
   }
 });
+
+dbTest("backlog: after downtime only the latest due follow-up of a set is sent; earlier ones are superseded", async () => {
+  await purgeTestJobs();
+  const a = await leadWithFollowUps();
+  const b = await leadWithFollowUps();
+  try {
+    const provider = new FakeWhatsAppProvider();
+    // The runner was down from before day 1 until noon on day 3: both day-1
+    // and day-3 jobs of both leads are claimed together.
+    const day3Noon = at(DAY3, H);
+    const s3 = await run(provider, day3Noon);
+    // a and b each: day 1 superseded, day 2 sent.
+    assertEquals([s3.claimed, s3.done, s3.cancelled], [4, 2, 2]);
+    assertEquals(provider.sent.map((s) => s.template).sort(), ["followup_2", "followup_2"]);
+
+    const day7Noon = at(DAY7, H);
+    const s7 = await run(provider, day7Noon);
+    assertEquals([s7.claimed, s7.done, s7.cancelled], [2, 2, 0]);
+    assertEquals(provider.sent.map((s) => s.template).sort(), ["followup_2", "followup_2", "followup_3", "followup_3"]);
+
+    for (const { leadId } of [a, b]) {
+      const [j1, j2, j3] = await followUpJobs(leadId);
+      assertEquals([j1.status, j2.status, j3.status], ["cancelled", "done", "done"]);
+      assertEquals((await eventsForJob(j1.id)).map((e) => [e.type, reasonOf(e)]), [
+        ["job_cancelled", "superseded by a later follow-up"],
+      ]);
+    }
+  } finally {
+    await cleanup({ leadIds: [a.leadId, b.leadId] });
+  }
+});
+
+dbTest("backlog: with all three overdue, one run sends only followup_3", async () => {
+  await purgeTestJobs();
+  const { leadId, phone } = await leadWithFollowUps();
+  try {
+    const provider = new FakeWhatsAppProvider();
+    const summary = await run(provider, at(DAY7, 2 * H));
+    assertEquals([summary.claimed, summary.done, summary.cancelled], [3, 1, 2]);
+    assertEquals(provider.sent.map((s) => [s.to, s.template]), [[phone, "followup_3"]]);
+    const jobs = await followUpJobs(leadId);
+    assertEquals(jobs.map((j) => j.status), ["cancelled", "cancelled", "done"]);
+    for (const j of jobs.slice(0, 2)) {
+      assertEquals((await eventsForJob(j.id)).map(reasonOf), ["superseded by a later follow-up"]);
+    }
+  } finally {
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+// --- Opting back in (spec 004, "Defaults picked": opt-out) --------------------
+
+/** Posts the demo form for `phone` through the real ingest-form handler at `now`. */
+async function enquire(phone: string, now: Date, provider: FakeWhatsAppProvider) {
+  const res = await ingest(
+    new Request("http://localhost/functions/v1/ingest-form", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source_key: "demo-web-form", name: "Asha Rao", phone, consent: true }),
+    }),
+    { db, provider, now: () => now, verifyTurnstile: () => Promise.resolve(true) },
+  );
+  assertEquals(res.status, 200);
+  return { requestId: res.headers.get("X-Request-Id")!, body: await res.json() };
+}
+
+async function requestEvents(requestId: string) {
+  const { data, error } = await db.from("events").select("type, payload").eq("payload->>request_id", requestId).order("id");
+  if (error) throw error;
+  return data;
+}
+
+dbTest("opt-in: a consented form after 24h clears an opt-out; the ack and follow-ups go out again", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const ingestProvider = new FakeWhatsAppProvider();
+  const first = new Date("2001-05-01T08:30:00.000Z"); // 14:00 IST
+  const second = new Date("2001-05-04T08:30:00.000Z"); // three days later
+  const { body } = await enquire(phone.national, first, ingestProvider);
+  const leadId: string = body.lead_id;
+  try {
+    const optedOutAt = at(first, H);
+    assertEquals((await recordOptOut(db, leadId, optedOutAt))!.length, 3);
+
+    const again = await enquire(phone.national, second, ingestProvider);
+    assertEquals(again.body, { lead_id: leadId, duplicate: false, ack_sent: true });
+    const acks = ingestProvider.sent.filter((s) => s.template === "enquiry_ack");
+    assertEquals(acks.map((s) => s.to), [phone.e164, phone.e164], "the second form is acknowledged");
+
+    const { data: lead } = await db.from("leads").select("opted_out_at, consent_at").eq("id", leadId).single();
+    assertEquals(lead!.opted_out_at, null);
+    assertEquals(new Date(lead!.consent_at).toISOString(), second.toISOString());
+    const events = await requestEvents(again.requestId);
+    const optIn = events.filter((e) => e.type === "lead_opted_in");
+    assertEquals(optIn.length, 1);
+    assertEquals(
+      new Date((optIn[0].payload as { previous_opted_out_at: string }).previous_opted_out_at).toISOString(),
+      optedOutAt.toISOString(),
+    );
+
+    // The new set is queued and sends; the old, opted-out set stays cancelled.
+    const jobs = await followUpJobs(leadId);
+    assertEquals(jobs.filter((j) => j.status === "queued").length, 3);
+    assertEquals(jobs.filter((j) => j.status === "cancelled").length, 3);
+    const provider = new FakeWhatsAppProvider();
+    const day1 = new Date("2001-05-05T05:30:00.000Z");
+    assertEquals((await run(provider, day1)).done, 1);
+    assertEquals(provider.sent.map((s) => [s.to, s.template]), [[phone.e164, "followup_1"]]);
+  } finally {
+    await db.from("messages").delete().in("provider_message_id", ingestProvider.sent.map((s) => s.providerMessageId));
+    await cleanup({ leadIds: [leadId] });
+  }
+});
+
+dbTest("opt-in: a duplicate form within 24h does not clear an opt-out, and nothing is sent", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const ingestProvider = new FakeWhatsAppProvider();
+  const { body } = await enquire(phone.national, ENQ, ingestProvider);
+  const leadId: string = body.lead_id;
+  try {
+    const optedOutAt = at(ENQ, H);
+    await recordOptOut(db, leadId, optedOutAt);
+    const sendsBefore = ingestProvider.sent.length;
+
+    const dup = await enquire(phone.national, at(ENQ, 2 * H), ingestProvider);
+    assertEquals(dup.body, { lead_id: leadId, duplicate: true });
+    assertEquals(ingestProvider.sent.length, sendsBefore, "a duplicate sends nothing");
+    const { data: lead } = await db.from("leads").select("opted_out_at").eq("id", leadId).single();
+    assertEquals(new Date(lead!.opted_out_at!).toISOString(), optedOutAt.toISOString());
+    assert(!(await requestEvents(dup.requestId)).some((e) => e.type === "lead_opted_in"));
+
+    const provider = new FakeWhatsAppProvider();
+    for (const t of [DAY1, DAY3, DAY7]) await run(provider, t);
+    assertEquals(provider.sent.length + provider.sessions.length, 0);
+    assert((await followUpJobs(leadId)).every((j) => j.status === "cancelled"));
+  } finally {
+    await db.from("messages").delete().in("provider_message_id", ingestProvider.sent.map((s) => s.providerMessageId));
+    await cleanup({ leadIds: [leadId] });
+  }
+});

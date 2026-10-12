@@ -13,7 +13,8 @@ import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
 import { scheduleFollowUps } from "../_shared/followups.ts";
 import { handleOptions, json } from "../_shared/http.ts";
-import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
+import { ackIdempotencyKey, enqueueJob, nextRunAt, opsAlertParams, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
+import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import {
   getWhatsAppProvider,
   type TemplateName,
@@ -26,6 +27,8 @@ export type Deps = {
   provider: WhatsAppProvider;
   now: () => Date;
   verifyTurnstile: (token: string | null) => Promise<boolean>;
+  /** Function environment; read for OPS_ALERT_PHONE. Unset means no ops alerts (skipped, and logged). */
+  env?: (k: string) => string | undefined;
 };
 
 const TEMPLATE_LANGUAGE = "en";
@@ -146,7 +149,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const nowIso = now().toISOString();
     const existing = must(
       await db.from("leads")
-        .select("id, last_enquiry_at, details")
+        .select("id, last_enquiry_at, details, opted_out_at")
         .eq("org_id", orgId)
         .eq("phone_e164", enquiry.phone)
         .maybeSingle(),
@@ -183,12 +186,22 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // (a concurrent submit of the same form), otherwise it's a duplicate.
       // New custom answers replace old ones key by key; unanswered keys are kept.
       // The last_enquiry_at guard below also guards this read-merge-write.
+      //
+      // A lead who opted out (STOP) and now submits the form again with the
+      // consent box ticked has opted back in: this is the only thing that
+      // clears opted_out_at (spec 004, "Defaults picked"). A duplicate within
+      // 24h returned above and does not. The opted_out_at guard stops this
+      // update from wiping a STOP recorded after we read the lead; that case
+      // falls through to duplicate() and sends nothing.
       const details = { ...(existing.details as Record<string, Json>), ...enquiry.details };
+      const update = db.from("leads")
+        .update({ ...fields, details, opted_out_at: null })
+        .eq("id", existing.id)
+        .eq("last_enquiry_at", existing.last_enquiry_at);
       const updated = must(
-        await db.from("leads")
-          .update({ ...fields, details })
-          .eq("id", existing.id)
-          .eq("last_enquiry_at", existing.last_enquiry_at)
+        await (existing.opted_out_at
+          ? update.eq("opted_out_at", existing.opted_out_at)
+          : update.is("opted_out_at", null))
           .select("id")
           .maybeSingle(),
         "update lead",
@@ -196,6 +209,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       if (!updated) return await duplicate(existing);
       leadId = updated.id;
       log.add("lead_updated");
+      if (existing.opted_out_at) log.add("lead_opted_in", { previous_opted_out_at: existing.opted_out_at });
     } else {
       const inserted = await db.from("leads")
         .insert({ org_id: orgId, phone_e164: enquiry.phone, ...fields, details: enquiry.details })
@@ -410,13 +424,25 @@ async function enqueueRetry(
   }
 }
 
-/** Enqueues the enquiry's follow-ups. Never throws: the lead is saved and acknowledged either way. */
+/**
+ * Enqueues the enquiry's follow-ups. Never throws: the lead is saved and
+ * acknowledged either way. A failure is logged and ops are alerted (ops_alert
+ * params: "followups_schedule", the lead id, 1, the error), since otherwise
+ * this lead would silently get no follow-ups.
+ */
 async function scheduleFollowUpsLogged(deps: Deps, log: EventLog, leadId: string, enquiryAt: Date): Promise<void> {
   try {
     const { enqueued, cancelled } = await scheduleFollowUps(deps.db, leadId, enquiryAt, deps.now());
     log.add("followups_scheduled", { job_ids: enqueued, cancelled_job_ids: cancelled });
   } catch (err) {
-    log.add("followups_schedule_failed", { error: errorMessage(err) });
+    const error = errorMessage(err);
+    log.add("followups_schedule_failed", { error });
+    const alert = await sendOpsAlert(
+      deps.provider,
+      deps.env ?? (() => undefined),
+      opsAlertParams({ kind: "followups_schedule", id: leadId, attempts: 1 }, error),
+    );
+    log.add(alert.type, alert.payload);
   }
 }
 
@@ -462,6 +488,7 @@ if (import.meta.main) {
     provider: getWhatsAppProvider(env),
     now: () => new Date(),
     verifyTurnstile: makeVerifyTurnstile(env),
+    env,
   };
   Deno.serve((req) => handler(req, deps));
 }
