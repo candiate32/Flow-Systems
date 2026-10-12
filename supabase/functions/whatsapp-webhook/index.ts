@@ -20,8 +20,10 @@
 //    one transaction per event that also sets processed_at. A replay or a
 //    concurrent duplicate finds it processed and changes nothing.
 // 5. For a lead created by its first message (and not an opt-out): send the
-//    session acknowledgement, alert the owners, schedule follow-ups. A failed
-//    send is retried through the job queue, as in ingest-form.
+//    acknowledgement (the session text inside the 24-hour window of that
+//    message, the enquiry_ack template outside it), alert the owners, and
+//    schedule follow-ups. A failed send is retried through the job queue, as
+//    in ingest-form.
 //
 // Partial failure. When an event fails to process, its row keeps
 // processed_at null and records processing_error and attempts; the other
@@ -29,9 +31,9 @@
 // fewer than MAX_PROCESSING_ATTEMPTS tries we answer 500, so the provider
 // redelivers: the processed events come back as duplicates and only the
 // failed ones run again. Once an event has failed MAX_PROCESSING_ATTEMPTS
-// times it is left as a dead letter (a `webhook_event_failed` event and a log
-// line) and the delivery is answered 200, so a poison event never keeps the
-// provider retrying.
+// times it is left as a dead letter (a `webhook_event_failed` event, a log
+// line and an ops alert) and the delivery is answered 200, so a poison event
+// never keeps the provider retrying.
 // Full specifier on purpose, as in ingest-form.
 // deno-lint-ignore no-import-prefix
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
@@ -39,10 +41,12 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must } from "../_shared/db.ts";
 import { scheduleFollowUps } from "../_shared/followups.ts";
 import { json } from "../_shared/http.ts";
-import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
+import { ackIdempotencyKey, enqueueJob, nextRunAt, opsAlertParams, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
 import { isOptOutMessage } from "../_shared/lead_activity.ts";
+import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import { renderInboundAck } from "../_shared/templates.ts";
 import { getWhatsAppProvider, type WhatsAppProvider } from "../_shared/whatsapp.ts";
+import { isInsideServiceWindow } from "../_shared/window.ts";
 import {
   getWebhookAdapter,
   type InboundEvent,
@@ -57,6 +61,8 @@ export type Deps = {
   /** Sends the acknowledgement and owner alerts for leads created by an inbound message. */
   provider: WhatsAppProvider;
   now: () => Date;
+  /** Function environment; read for OPS_ALERT_PHONE. Unset means no ops alerts (skipped, and logged). */
+  env?: (k: string) => string | undefined;
 };
 
 /** Tries per event before it is left as a dead letter and the provider gets a 200. */
@@ -174,6 +180,7 @@ async function storeEvents(deps: Deps, events: NormalizedEvent[]): Promise<Map<s
         provider,
         provider_event_id: e.providerEventId,
         kind: e.kind,
+        phone: e.phone,
         payload: (e.raw ?? {}) as NonNullable<Json>,
         received_at: deps.now().toISOString(),
       })),
@@ -271,7 +278,12 @@ async function processEvent(deps: Deps, source: Source, event: NormalizedEvent, 
   return { status: result.outcome };
 }
 
-/** Records a failed attempt; after the last one, leaves the event as a dead letter. */
+/**
+ * Records a failed attempt. The attempt is counted in SQL, so two deliveries
+ * failing at once both count. After the last attempt the event is a dead
+ * letter: a `webhook_event_failed` event plus an ops alert, since it may be a
+ * real customer's message that nobody would otherwise see.
+ */
 async function recordFailure(
   deps: Deps,
   source: Source,
@@ -279,17 +291,20 @@ async function recordFailure(
   row: StoredEvent,
   error: string,
 ): Promise<EventOutcome> {
-  const attempts = row.attempts + 1;
-  const { error: dbError } = await deps.db.from("webhook_events")
-    .update({ attempts, processing_error: error, org_id: source.org_id })
-    .eq("id", row.id)
-    .is("processed_at", null);
+  const res = await deps.db.rpc("record_webhook_failure", {
+    p_webhook_event_id: row.id,
+    p_error: error,
+    p_org_id: source.org_id,
+  });
+  // If recording fails too, count this attempt anyway, so a broken database
+  // still ends in a dead letter rather than endless redeliveries.
+  const attempts = res.error || res.data === null ? row.attempts + 1 : res.data;
   log("event_failed", {
     webhook_event_id: row.id,
     provider_event_id: event.providerEventId,
     attempts,
     error,
-    ...(dbError ? { record_error: dbError.message } : {}),
+    ...(res.error ? { record_error: res.error.message } : {}),
   });
   if (attempts < MAX_PROCESSING_ATTEMPTS) return { status: "failed", attempts };
   await addEvent(deps, source.org_id, null, "webhook_event_failed", {
@@ -299,6 +314,12 @@ async function recordFailure(
     attempts,
     error,
   });
+  const alert = await sendOpsAlert(
+    deps.provider,
+    deps.env ?? (() => undefined),
+    opsAlertParams({ kind: "webhook_event", id: event.providerEventId, attempts }, error),
+  );
+  await addEvent(deps, source.org_id, null, alert.type, { ...alert.payload, webhook_event_id: row.id });
   return { status: "failed", attempts };
 }
 
@@ -306,9 +327,8 @@ async function recordFailure(
 
 /**
  * Same as for a form enquiry: acknowledge the person, alert the owners and
- * schedule the day 1/3/7 follow-ups from the time they wrote. Inside the
- * 24-hour window they just opened, so the acknowledgement is a session
- * message. Never throws: the lead is recorded either way.
+ * schedule the day 1/3/7 follow-ups from the time they wrote. Never throws:
+ * the lead is recorded either way.
  */
 async function welcomeNewLead(
   deps: Deps,
@@ -327,10 +347,30 @@ async function welcomeNewLead(
     const { enqueued, cancelled } = await scheduleFollowUps(deps.db, leadId, event.at, deps.now());
     await addEvent(deps, source.org_id, leadId, "followups_scheduled", { job_ids: enqueued, cancelled_job_ids: cancelled });
   } catch (err) {
-    await addEvent(deps, source.org_id, leadId, "followups_schedule_failed", { error: errorMessage(err) });
+    // As in ingest-form: without an alert this lead would silently get no follow-ups.
+    const error = errorMessage(err);
+    await addEvent(deps, source.org_id, leadId, "followups_schedule_failed", { error });
+    const alert = await sendOpsAlert(
+      deps.provider,
+      deps.env ?? (() => undefined),
+      opsAlertParams({ kind: "followups_schedule", id: leadId, attempts: 1 }, error),
+    );
+    await addEvent(deps, source.org_id, leadId, alert.type, alert.payload);
   }
 }
 
+/**
+ * The acknowledgement. Free-form text is only allowed inside the 24-hour
+ * window that the person's message opened. The window runs from when they
+ * sent it, not from when the webhook arrived; a redelivery after an outage can
+ * be a day late. Inside the window: the inbound_ack session text. Outside: the
+ * enquiry_ack utility template, with the same params. A failed send is retried
+ * by a send_message job, which always sends the template (allowed either way).
+ *
+ * first_auto_reply_at is set whichever way the ack went out. It records when
+ * our first automatic reply left, so a late ack shows up in the metrics as a
+ * slow reply rather than as no reply.
+ */
 async function acknowledge(
   deps: Deps,
   orgId: string,
@@ -339,24 +379,29 @@ async function acknowledge(
   params: string[],
 ): Promise<void> {
   const { db, provider } = deps;
-  const text = renderInboundAck(params);
+  const mode = isInsideServiceWindow(event.at, deps.now()) ? "session" : "template";
+  const text = mode === "session" ? renderInboundAck(params) : null;
   const base = {
     org_id: orgId,
     lead_id: leadId,
     to_phone: event.phone,
     direction: "outbound",
-    kind: "session",
+    kind: mode,
+    template_name: mode === "template" ? "enquiry_ack" : null,
     body: text,
     provider: provider.name,
   } as const;
+  const logged = { kind: "inbound_ack", mode };
 
   let providerMessageId: string;
   try {
-    ({ providerMessageId } = await provider.sendSession({ to: event.phone, text }));
+    ({ providerMessageId } = text !== null
+      ? await provider.sendSession({ to: event.phone, text })
+      : await provider.sendTemplate({ to: event.phone, template: "enquiry_ack", language: TEMPLATE_LANGUAGE, params }));
   } catch (err) {
     const error = errorMessage(err);
     const { data } = await db.from("messages").insert({ ...base, status: "failed", error }).select("id").maybeSingle();
-    await addEvent(deps, orgId, leadId, "send_failed", { kind: "inbound_ack", message_id: data?.id ?? null, error });
+    await addEvent(deps, orgId, leadId, "send_failed", { ...logged, message_id: data?.id ?? null, error });
     // Retry through the job queue with the enquiry_ack template, which takes
     // the same params and is allowed inside or outside the window.
     try {
@@ -386,9 +431,10 @@ async function acknowledge(
       await db.from("leads").update({ first_auto_reply_at: sentAt }).eq("id", leadId).is("first_auto_reply_at", null),
       "set first_auto_reply_at",
     );
-    await addEvent(deps, orgId, leadId, "ack_sent", { kind: "inbound_ack", message_id: data.id });
+    await addEvent(deps, orgId, leadId, "ack_sent", { ...logged, message_id: data.id });
   } catch (err) {
     await addEvent(deps, orgId, leadId, "ack_record_failed", {
+      ...logged,
       provider_message_id: providerMessageId,
       error: errorMessage(err),
     });
@@ -483,6 +529,7 @@ if (import.meta.main) {
     adapter: getWebhookAdapter(env),
     provider: getWhatsAppProvider(env),
     now: () => new Date(),
+    env,
   };
   Deno.serve((req) => handler(req, deps));
 }

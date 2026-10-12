@@ -3,8 +3,9 @@ import { assert, assertEquals, assertExists, assertMatch } from "jsr:@std/assert
 // deno-lint-ignore no-import-prefix -- see index.ts
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Database } from "../_shared/database.types.ts";
-import { followUpIdempotencyKey } from "../_shared/followups.ts";
-import { scheduleFollowUps } from "../_shared/followups.ts";
+import { followUpIdempotencyKey, followUpTimes, scheduleFollowUps } from "../_shared/followups.ts";
+import { handler as ingest } from "../ingest-form/index.ts";
+import { runClaimedJobs } from "../run-jobs/index.ts";
 import { renderInboundAck } from "../_shared/templates.ts";
 import { FakeWhatsAppProvider, type TemplateMessage, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { FAKE_SIGNATURE_HEADER, FakeWebhookAdapter, signFakeWebhook } from "../_shared/whatsapp_webhook.ts";
@@ -541,7 +542,9 @@ dbTest(`an event that fails ${MAX_PROCESSING_ATTEMPTS} times is left as a dead l
   try {
     const ev = inbound(phone, "poison", T);
     const body = JSON.stringify({ events: [ev] });
-    const d = deps({ db: failingDb((id) => id === ev.id, new Map()) });
+    const provider = new FakeWhatsAppProvider();
+    const env = (k: string) => (k === "OPS_ALERT_PHONE" ? "+91 90000 00099" : undefined);
+    const d = deps({ db: failingDb((id) => id === ev.id, new Map()), provider, env });
     const codes: number[] = [];
     for (let i = 0; i < MAX_PROCESSING_ATTEMPTS + 1; i++) {
       const res = await handler(await signed(body), d);
@@ -554,7 +557,17 @@ dbTest(`an event that fails ${MAX_PROCESSING_ATTEMPTS} times is left as a dead l
     const { data: dead } = await db.from("events").select("payload").eq("org_id", DEMO_ORG).eq("type", "webhook_event_failed")
       .eq("payload->>provider_event_id", ev.id);
     assertEquals(dead!.length, 1, "one dead-letter event");
+
+    // Ops hear about it once: a real customer's message may be stuck.
+    assertEquals(provider.sent.map((s) => [s.template, s.to, s.params.slice(0, 3)]), [
+      ["ops_alert", "+919000000099", ["webhook_event", ev.id, String(MAX_PROCESSING_ATTEMPTS)]],
+    ]);
+    assertMatch(provider.sent[0].params[3], /connection reset/);
+    const { data: alerts } = await db.from("events").select("type, payload").eq("org_id", DEMO_ORG)
+      .like("type", "ops_alert_%").eq("payload->>webhook_event_id", String(row!.id));
+    assertEquals(alerts!.map((a) => a.type), ["ops_alert_sent"]);
     await db.from("events").delete().eq("type", "webhook_event_failed").eq("payload->>provider_event_id", ev.id);
+    await db.from("events").delete().like("type", "ops_alert_%").eq("payload->>webhook_event_id", String(row!.id));
   } finally {
     await cleanup();
   }
@@ -613,6 +626,111 @@ dbTest("two deliveries of the same new number at once create one lead and one ac
     assertEquals(provider.sent.length, 1, "one owner alert");
     assertEquals(results.reduce((s, r) => s + r.body.processed, 0), 1);
   } finally {
+    await cleanup();
+  }
+});
+
+// --- The 24-hour window for the acknowledgement ----------------------------------
+
+const H = 60 * MIN;
+for (
+  const [label, ageMs, mode] of [
+    ["23:59", 24 * H - MIN, "session"],
+    ["24:01", 24 * H + MIN, "template"],
+  ] as const
+) {
+  dbTest(`a new number's message that is ${label} old when it arrives gets a ${mode} acknowledgement`, async () => {
+    const phone = uniquePhone();
+    const provider = new FakeWhatsAppProvider();
+    const now = new Date(T.getTime() + ageMs);
+    try {
+      const res = await post(deps({ provider, now: () => now }), [inbound(phone, "Hi", T, { profile_name: "Kavya" })]);
+      assertEquals(res.status, 200);
+      const l = await lead(phone);
+      assertExists(l);
+      cleanupLeads.push(l.id);
+      cleanupProviderIds.push(...provider.sent.map((s) => s.providerMessageId));
+
+      const { data: acks } = await db.from("messages").select("kind, template_name, body, status")
+        .eq("lead_id", l.id).eq("direction", "outbound");
+      if (mode === "session") {
+        assertEquals(provider.sessions.map((s) => [s.to, s.text]), [[phone, renderInboundAck(["Kavya", DEMO_ORG_NAME])]]);
+        assertEquals(provider.sent.map((s) => s.template), ["owner_alert"]);
+        assertEquals(acks, [{ kind: "session", template_name: null, body: provider.sessions[0].text, status: "sent" }]);
+      } else {
+        assertEquals(provider.sessions, [], "no free-form text outside the window");
+        assertEquals(
+          provider.sent.filter((s) => s.to === phone).map((s) => [s.template, s.params]),
+          [["enquiry_ack", ["Kavya", DEMO_ORG_NAME]]],
+        );
+        assertEquals(acks, [{ kind: "template", template_name: "enquiry_ack", body: null, status: "sent" }]);
+      }
+      // Set either way: a late ack is a slow reply, not no reply.
+      assertEquals(new Date(l.first_auto_reply_at!).toISOString(), now.toISOString());
+      const { data: ev } = await db.from("events").select("payload").eq("lead_id", l.id).eq("type", "ack_sent").single();
+      assertEquals((ev!.payload as { mode: string }).mode, mode);
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+// --- A staff reply after a repeat enquiry stops that enquiry's follow-ups ----------
+
+dbTest("an echo after a repeat enquiry stops a follow-up that was already running", async () => {
+  // In 2001, so only this test's jobs are due when it runs the job runner.
+  const E1 = new Date("2001-05-01T08:30:00.000Z"); // 14:00 IST
+  const E2 = new Date(E1.getTime() + 10 * 24 * H);
+  const [D1] = followUpTimes(E2);
+  await db.from("jobs").delete().lt("run_at", "2002-01-01T00:00:00Z");
+  const phone = uniquePhone();
+  const ingestProvider = new FakeWhatsAppProvider();
+  const enquire = async (at: Date) => {
+    const res = await ingest(
+      new Request("http://localhost/functions/v1/ingest-form", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source_key: "demo-web-form", name: "Nisha Rao", phone: phone.slice(3), consent: true }),
+      }),
+      { db, provider: ingestProvider, now: () => at, verifyTurnstile: () => Promise.resolve(true) },
+    );
+    assertEquals(res.status, 200);
+    return (await res.json()).lead_id as string;
+  };
+  const staffReply = async (at: Date) => {
+    const res = await post(deps({ now: () => new Date(at.getTime() + 2_000) }), [echo(phone, "Hi Nisha, calling you now", at)]);
+    assertEquals(res.status, 200);
+  };
+
+  const leadId = await enquire(E1);
+  cleanupLeads.push(leadId);
+  try {
+    const echo1 = new Date(E1.getTime() + H);
+    await staffReply(echo1);
+    assertEquals(await enquire(E2), leadId, "the repeat enquiry is the same lead");
+
+    // Follow-up 1 of the second enquiry is claimed (running) when staff reply again.
+    const { data: claimed, error } = await db.rpc("claim_jobs", { batch: 10, as_of: D1.toISOString() });
+    if (error) throw error;
+    assertEquals(claimed!.map((j) => [j.lead_id, j.idempotency_key]), [[leadId, followUpIdempotencyKey(leadId, 1, E2)]]);
+    const echo2 = new Date(D1.getTime() + MIN);
+    await staffReply(echo2);
+
+    const l = await lead(phone);
+    assertEquals(new Date(l!.first_human_reply_at!).toISOString(), echo1.toISOString(), "first reply kept for metrics");
+    assertEquals(new Date(l!.last_human_reply_at!).toISOString(), echo2.toISOString(), "latest reply moved forward");
+
+    // That runner died; the job is reclaimed after its lease and must not send.
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs({ db, provider, now: () => new Date(D1.getTime() + 16 * MIN), env: () => undefined });
+    assertEquals([summary.claimed, summary.cancelled], [1, 1]);
+    assertEquals(provider.sent.length + provider.sessions.length, 0, "no follow-up after the staff reply");
+    const { data: job } = await db.from("jobs").select("id, status").eq("id", claimed![0].id).single();
+    assertEquals(job!.status, "cancelled");
+    const { data: why } = await db.from("events").select("payload").eq("payload->>job_id", job!.id).eq("type", "job_cancelled");
+    assertEquals(why!.map((e) => (e.payload as { reason: string }).reason), ["staff replied after the enquiry"]);
+  } finally {
+    await db.from("messages").delete().in("provider_message_id", ingestProvider.sent.map((s) => s.providerMessageId));
     await cleanup();
   }
 });
