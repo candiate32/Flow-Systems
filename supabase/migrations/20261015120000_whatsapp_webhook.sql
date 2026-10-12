@@ -14,6 +14,25 @@
 -- - Deleting a lead redacts the raw payloads routed to it (client lead data
 --   is deleted on request) but keeps the rows, so a late provider retry of the
 --   same event is still recognised as processed and does not recreate the lead.
+--   Rows that carry the lead's phone but were never tied to it (dead letters,
+--   unrouted deliveries, ignored echoes) are redacted too.
+-- - leads.last_human_reply_at: the latest staff reply. first_human_reply_at
+--   stays set-once for metrics; follow-ups check the latest, so a staff reply
+--   after a repeat enquiry still stops that enquiry's follow-ups.
+-- - private.record_webhook_failure counts a failed processing attempt
+--   atomically.
+
+-- leads.last_human_reply_at --------------------------------------------------------
+alter table public.leads add column last_human_reply_at timestamptz;
+
+comment on column public.leads.last_human_reply_at is
+  'Latest staff reply (WhatsApp Business app echo). Only moves forward. Follow-ups are skipped when it is after the enquiry (spec 004, B.2).';
+
+update public.leads l
+   set last_human_reply_at = coalesce(
+         (select max(m.sent_at) from public.messages m where m.lead_id = l.id and m.direction = 'echo'),
+         l.first_human_reply_at)
+ where l.first_human_reply_at is not null;
 
 -- webhook_events ----------------------------------------------------------------
 alter table public.webhook_events
@@ -22,6 +41,9 @@ alter table public.webhook_events
   -- No foreign key: the before-delete trigger on leads clears it and redacts
   -- the payload (a foreign key's own action would run first and hide the rows).
   add column lead_id uuid,
+  -- The customer's phone (E.164) from the parsed event, so a lead's deletion
+  -- can find rows that were never tied to the lead.
+  add column phone text,
   add column attempts integer not null default 0 check (attempts >= 0),
   add column processing_error text,
   add column result jsonb;
@@ -34,7 +56,11 @@ comment on column public.webhook_events.processing_error is
 create index webhook_events_unprocessed_idx on public.webhook_events (received_at) where processed_at is null;
 create index webhook_events_org_id_idx on public.webhook_events (org_id);
 create index webhook_events_lead_id_idx on public.webhook_events (lead_id);
+create index webhook_events_phone_idx on public.webhook_events (phone) where phone is not null;
 
+-- Redacts what the webhook kept about a lead being deleted: rows routed to
+-- it, and rows with its phone that were never tied to a lead, in its org or
+-- not routed to any org.
 create function private.redact_lead_webhook_events()
 returns trigger
 language plpgsql
@@ -45,11 +71,14 @@ begin
   update public.webhook_events w
      set payload = jsonb_build_object('redacted', true),
          result = null,
-         lead_id = null
-   where w.lead_id = old.id
+         lead_id = null,
+         phone = null
+   where (w.lead_id = old.id
+          or (w.lead_id is null and w.phone = old.phone_e164
+              and (w.org_id = old.org_id or w.org_id is null)))
      -- When the whole org is being deleted its webhook events go with it;
      -- updating them here would trip their org foreign key.
-     and exists (select 1 from public.orgs o where o.id = w.org_id);
+     and (w.org_id is null or exists (select 1 from public.orgs o where o.id = w.org_id));
   return old;
 end;
 $$;
@@ -91,7 +120,8 @@ revoke execute on function private.message_status_rank(text) from public, anon, 
 --          forward, and either records an opt-out (STOP/UNSUBSCRIBE: sets
 --          opted_out_at, cancels follow-ups) or cancels queued follow-ups.
 -- echo     Staff replied from the WhatsApp Business app. For a known lead:
---          stores an echo message, sets first_human_reply_at if empty, cancels
+--          stores an echo message, sets first_human_reply_at if empty, moves
+--          last_human_reply_at forward, cancels
 --          queued follow-ups. An echo to a number that is not a lead is not
 --          stored (no consent, nothing to attach it to).
 -- status   Moves messages.status forward by (provider, provider_message_id)
@@ -155,7 +185,8 @@ begin
     end if;
     update public.messages m
        set status = v_status,
-           error = case when v_status = 'failed' then coalesce(p_event->>'error', 'failed') else m.error end
+           -- A delivered or read receipt replacing failed clears the failure.
+           error = case when v_status = 'failed' then coalesce(p_event->>'error', 'failed') end
      where m.org_id = v_org
        and m.provider = v_row.provider
        and m.provider_message_id = v_pmid
@@ -227,7 +258,12 @@ begin
       on conflict (provider, provider_message_id) where provider_message_id is not null do nothing
       returning id into v_message;
 
-      update public.leads l set first_human_reply_at = coalesce(l.first_human_reply_at, v_at) where l.id = v_lead;
+      -- first_human_reply_at is set once (metrics); last_human_reply_at only
+      -- moves forward (greatest() skips nulls), and is what follow-ups check.
+      update public.leads l
+         set first_human_reply_at = coalesce(l.first_human_reply_at, v_at),
+             last_human_reply_at = greatest(l.last_human_reply_at, v_at)
+       where l.id = v_lead;
       select coalesce(array_agg(c), '{}') into v_cancelled
         from private.cancel_followups(v_lead, 'staff replied', v_at) as c;
 
@@ -272,3 +308,35 @@ as $$
 $$;
 revoke execute on function public.process_whatsapp_event(bigint, uuid, jsonb, timestamptz) from public, anon, authenticated;
 grant execute on function public.process_whatsapp_event(bigint, uuid, jsonb, timestamptz) to service_role;
+
+-- record_webhook_failure ------------------------------------------------------------
+-- Counts one failed processing attempt of an unprocessed event, in one
+-- statement (two deliveries failing at once both count). Returns the new
+-- attempts, or null when the event is gone or was processed meanwhile.
+create function private.record_webhook_failure(p_webhook_event_id bigint, p_error text, p_org_id uuid default null)
+returns integer
+language sql
+volatile
+set search_path = ''
+as $$
+  update public.webhook_events w
+     set attempts = w.attempts + 1,
+         processing_error = p_error,
+         org_id = coalesce(p_org_id, w.org_id)
+   where w.id = p_webhook_event_id
+     and w.processed_at is null
+  returning w.attempts;
+$$;
+revoke execute on function private.record_webhook_failure(bigint, text, uuid) from public, anon, authenticated;
+
+create function public.record_webhook_failure(p_webhook_event_id bigint, p_error text, p_org_id uuid default null)
+returns integer
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select private.record_webhook_failure(p_webhook_event_id, p_error, p_org_id);
+$$;
+revoke execute on function public.record_webhook_failure(bigint, text, uuid) from public, anon, authenticated;
+grant execute on function public.record_webhook_failure(bigint, text, uuid) to service_role;

@@ -174,6 +174,7 @@ const fresh = (over: Partial<FollowUpLead> = {}): FollowUpLead => ({
   opted_out_at: null,
   last_inbound_at: null,
   first_human_reply_at: null,
+  last_human_reply_at: null,
   ...over,
 });
 
@@ -213,6 +214,19 @@ Deno.test("decideFollowUp: a staff reply after the enquiry cancels; one before i
   );
   assertEquals(
     decideFollowUp(fresh({ first_human_reply_at: iso(new Date(ENQ.getTime() - 30 * 24 * H)) }), ENQ, DAY1),
+    { action: "send", mode: "template" },
+  );
+});
+
+Deno.test("decideFollowUp: on a repeat enquiry, the latest staff reply counts, not the first", () => {
+  // Staff replied to an enquiry a month ago (first_human_reply_at), then again after this one.
+  const first = iso(new Date(ENQ.getTime() - 30 * 24 * H));
+  assertEquals(
+    decideFollowUp(fresh({ first_human_reply_at: first, last_human_reply_at: iso(new Date(ENQ.getTime() + H)) }), ENQ, DAY1),
+    { action: "cancel", reason: "staff replied after the enquiry" },
+  );
+  assertEquals(
+    decideFollowUp(fresh({ first_human_reply_at: first, last_human_reply_at: first }), ENQ, DAY1),
     { action: "send", mode: "template" },
   );
 });

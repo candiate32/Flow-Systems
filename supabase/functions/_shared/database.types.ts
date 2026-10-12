@@ -97,14 +97,14 @@ isOneToOne: false
                   ]
                 },"leads": {
                   Row: {
-                    "bhk": string | null,"consent_at": string,"created_at": string,"details": NonNullable<Json>,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_inbound_at": string | null,"name": string,"opted_out_at": string | null,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
+                    "bhk": string | null,"consent_at": string,"created_at": string,"details": NonNullable<Json>,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_human_reply_at": string | null,"last_inbound_at": string | null,"name": string,"opted_out_at": string | null,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name": string,"opted_out_at"?: string | null,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_human_reply_at"?: string | null,"last_inbound_at"?: string | null,"name": string,"opted_out_at"?: string | null,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Update: {
-                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name"?: string,"opted_out_at"?: string | null,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_human_reply_at"?: string | null,"last_inbound_at"?: string | null,"name"?: string,"opted_out_at"?: string | null,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Relationships: [
                     {
@@ -229,14 +229,14 @@ isOneToOne: false
                   ]
                 },"webhook_events": {
                   Row: {
-                    "attempts": number,"id": number,"kind": string | null,"lead_id": string | null,"org_id": string | null,"payload": NonNullable<Json>,"processed_at": string | null,"processing_error": string | null,"provider": string,"provider_event_id": string,"received_at": string,"result": Json | null
+                    "attempts": number,"id": number,"kind": string | null,"lead_id": string | null,"org_id": string | null,"payload": NonNullable<Json>,"phone": string | null,"processed_at": string | null,"processing_error": string | null,"provider": string,"provider_event_id": string,"received_at": string,"result": Json | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload": NonNullable<Json>,"processed_at"?: string | null,"processing_error"?: string | null,"provider": string,"provider_event_id": string,"received_at"?: string,"result"?: Json | null
+                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload": NonNullable<Json>,"phone"?: string | null,"processed_at"?: string | null,"processing_error"?: string | null,"provider": string,"provider_event_id": string,"received_at"?: string,"result"?: Json | null
                   }
                   Update: {
-                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload"?: NonNullable<Json>,"processed_at"?: string | null,"processing_error"?: string | null,"provider"?: string,"provider_event_id"?: string,"received_at"?: string,"result"?: Json | null
+                    "attempts"?: number,"id"?: never,"kind"?: string | null,"lead_id"?: string | null,"org_id"?: string | null,"payload"?: NonNullable<Json>,"phone"?: string | null,"processed_at"?: string | null,"processing_error"?: string | null,"provider"?: string,"provider_event_id"?: string,"received_at"?: string,"result"?: Json | null
                   }
                   Relationships: [
                     {
@@ -283,6 +283,9 @@ isOneToOne: false
                            },
 "record_opt_out":
 { Args: { "p_at"?: string,"p_lead_id": string }; Returns: (string)[]
+                           },
+"record_webhook_failure":
+{ Args: { "p_error": string,"p_org_id"?: string,"p_webhook_event_id": number }; Returns: number
                            },
 "schedule_followups":
 { Args: { "p_as_of"?: string,"p_jobs": Json,"p_lead_id": string,"p_reason": string }; Returns: Json

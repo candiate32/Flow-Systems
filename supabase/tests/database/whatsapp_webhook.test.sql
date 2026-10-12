@@ -1,7 +1,7 @@
 -- Spec 004, slice C: webhook_events additions, process_whatsapp_event and the
 -- lead-delete redaction (supabase/migrations/20261015120000_whatsapp_webhook.sql).
 begin;
-select plan(72);
+select plan(84);
 
 -- Schema and privileges -------------------------------------------------------
 select has_function('private', 'process_whatsapp_event', array['bigint', 'uuid', 'jsonb', 'timestamp with time zone']);
@@ -143,6 +143,17 @@ select ok(public.process_whatsapp_event(900005, '40000000-0000-4000-8000-0000000
     ->>'outcome' = 'processed', 'a second echo is processed');
 select is((select first_human_reply_at from public.leads where id = '40000000-0000-4000-8000-0000000000b1'),
   '2030-01-01T10:00:00Z'::timestamptz, 'but keeps the first human reply time');
+select is((select last_human_reply_at from public.leads where id = '40000000-0000-4000-8000-0000000000b1'),
+  '2030-01-01T11:00:00Z'::timestamptz, 'and moves last_human_reply_at to the latest echo');
+insert into public.webhook_events (id, provider, provider_event_id, payload) overriding system value
+values (900018, 'fake', 'wh-e-echo-old', '{}');
+select ok(public.process_whatsapp_event(900018, '40000000-0000-4000-8000-0000000000a1',
+    '{"kind":"echo","phone":"+919811120001","text":"older","at":"2030-01-01T09:30:00Z","provider_message_id":"wh-echo-old"}')
+    ->>'outcome' = 'processed', 'a late delivery of an older echo is processed');
+select results_eq(
+  $$ select first_human_reply_at, last_human_reply_at from public.leads where id = '40000000-0000-4000-8000-0000000000b1' $$,
+  $$ values ('2030-01-01T10:00:00Z'::timestamptz, '2030-01-01T11:00:00Z'::timestamptz) $$,
+  'but moves neither reply time back');
 select is(
   public.process_whatsapp_event(900006, '40000000-0000-4000-8000-0000000000a1',
     '{"kind":"echo","phone":"+919811129999","text":"Hi","at":"2030-01-01T11:00:00Z","provider_message_id":"wh-echo-3"}')->>'outcome',
@@ -176,6 +187,8 @@ select is(
   public.process_whatsapp_event(900011, '40000000-0000-4000-8000-0000000000a1',
     '{"kind":"status","status":"delivered","at":"2030-01-01T05:02:00Z","provider_message_id":"wh-out-2"}')->'status_applied',
   'true'::jsonb, 'a delivered receipt after failed is applied (proof of delivery)');
+select results_eq($$ select status, error from public.messages where id = '40000000-0000-4000-8000-0000000000c2' $$,
+  $$ values ('delivered'::text, null::text) $$, 'and clears the failure''s error');
 select is(
   public.process_whatsapp_event(900012, '40000000-0000-4000-8000-0000000000a1',
     '{"kind":"status","status":"failed","error":"late","at":"2030-01-01T05:03:00Z","provider_message_id":"wh-out-2"}')->'status_applied',
@@ -229,8 +242,36 @@ select throws_ok(
   'P0002', null, 'an unknown webhook event raises');
 select is((select processed_at from public.webhook_events where id = 900017), null, 'a failed call leaves the event unprocessed');
 
+-- record_webhook_failure -------------------------------------------------------------
+select is(public.record_webhook_failure(900017, 'boom 1', '40000000-0000-4000-8000-000000000001'), 1,
+  'record_webhook_failure counts the first failed attempt');
+select is(public.record_webhook_failure(900017, 'boom 2'), 2, 'and the next, in SQL');
+select results_eq($$ select attempts, processing_error, org_id::text, processed_at from public.webhook_events where id = 900017 $$,
+  $$ values (2, 'boom 2'::text, '40000000-0000-4000-8000-000000000001'::text, null::timestamptz) $$,
+  'keeping the last error and the org, and leaving it unprocessed');
+select is(public.record_webhook_failure(900001, 'late'), null, 'a processed event is not counted as failed');
+select function_privs_are('public', 'record_webhook_failure', array['bigint', 'text', 'uuid'], 'anon', '{}');
+select function_privs_are('public', 'record_webhook_failure', array['bigint', 'text', 'uuid'], 'authenticated', '{}');
+select function_privs_are('public', 'record_webhook_failure', array['bigint', 'text', 'uuid'], 'service_role', array['EXECUTE']);
+
 -- Deleting a lead redacts its webhook payloads ---------------------------------------
+-- Rows with the lead's phone that were never tied to it: a dead letter in its
+-- org, an unrouted delivery, and (to keep) one in another org.
+insert into public.webhook_events (id, provider, provider_event_id, kind, phone, org_id, payload, processing_error)
+overriding system value
+values (900021, 'fake', 'wh-e-dead', 'inbound', '+919811120002', '40000000-0000-4000-8000-000000000001',
+        '{"phone":"+919811120002","text":"secret"}', 'boom'),
+       (900022, 'fake', 'wh-e-unrouted', 'inbound', '+919811120002', null,
+        '{"phone":"+919811120002","text":"secret"}', 'unknown source'),
+       (900023, 'fake', 'wh-e-other-org', 'inbound', '+919811120002', '40000000-0000-4000-8000-000000000002',
+        '{"phone":"+919811120002","text":"theirs"}', null);
 delete from public.leads where org_id = '40000000-0000-4000-8000-000000000001' and phone_e164 = '+919811120002';
+select results_eq(
+  $$ select id, payload, phone from public.webhook_events where id in (900021, 900022, 900023) order by id $$,
+  $$ values (900021::bigint, '{"redacted": true}'::jsonb, null::text),
+            (900022::bigint, '{"redacted": true}'::jsonb, null::text),
+            (900023::bigint, '{"phone":"+919811120002","text":"theirs"}'::jsonb, '+919811120002'::text) $$,
+  'deleting a lead also redacts rows with its phone in its org or unrouted, not another org''s');
 select results_eq($$ select payload, lead_id, result, processed_at is not null from public.webhook_events where id = 900001 $$,
   $$ values ('{"redacted": true}'::jsonb, null::uuid, null::jsonb, true) $$,
   'deleting a lead redacts its webhook payload but keeps the processed row');
