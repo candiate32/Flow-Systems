@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { displayClass } from '../forms/components/ui'
 
-// Every beat is paused until the exchange is on screen (see HeroExchange).
-const playState = '[animation-play-state:var(--hero-play,running)]'
-
 /** Plays in once, `delay` ms after the exchange comes into view. Shown as is with reduced motion. */
 function Beat({ delay, className = '', children }: { delay: number; className?: string; children: ReactNode }) {
-  const style: CSSProperties = { animationDelay: `${delay}ms` }
+  // Inline, so the animation shorthand in the class can't reset it to running.
+  const style: CSSProperties = { animationDelay: `${delay}ms`, animationPlayState: 'var(--hero-play, running)' }
   return (
-    <div style={style} className={`motion-safe:animate-[hero-in_640ms_cubic-bezier(0.22,1,0.36,1)_both] ${playState} ${className}`}>
+    <div style={style} className={`motion-safe:animate-[hero-in_640ms_cubic-bezier(0.22,1,0.36,1)_both] ${className}`}>
       {children}
     </div>
   )
@@ -37,8 +35,8 @@ function Typing({ delay }: { delay: number }) {
   return (
     <div
       aria-hidden="true"
-      style={{ animationDelay: `${delay}ms` }}
-      className={`absolute top-0 left-0 flex gap-1 rounded-2xl rounded-tl-md bg-[var(--ff-surface)] px-3.5 py-3.5 opacity-0 motion-safe:animate-[typing-window_1100ms_ease-in-out_both] motion-reduce:hidden ${playState}`}
+      style={{ animationDelay: `${delay}ms`, animationPlayState: 'var(--hero-play, running)' }}
+      className="absolute top-0 left-0 flex gap-1 rounded-2xl rounded-tl-md bg-[var(--ff-surface)] px-3.5 py-3.5 opacity-0 motion-safe:animate-[typing-window_1100ms_ease-in-out_both] motion-reduce:hidden"
     >
       {[0, 160, 320].map((d) => (
         <span

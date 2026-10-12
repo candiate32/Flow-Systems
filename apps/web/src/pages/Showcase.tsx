@@ -4,6 +4,7 @@ import { FormStack } from '../forms/components/FormStack'
 import { Swatch } from '../forms/components/Swatch'
 import { FORM_CONFIGS, getFormConfig, HOME_FORM_SLUG } from '../forms/configs'
 import { SHARED_TYPE } from '../forms/themes'
+import { BrandMark } from '../home/BrandMark'
 
 /** The default form keeps a clean `/`; the others are `/?form=<slug>`, so every view can be shared. */
 function showcaseLink(slug: string): To {
@@ -100,7 +101,14 @@ export default function Showcase() {
   return (
     <div className="flex min-h-dvh flex-col bg-stone-950" style={{ fontFamily: SHARED_TYPE.fontBody }}>
       <header className="border-b border-white/10 text-stone-100">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2 sm:px-6 lg:gap-6 lg:px-8">
+        <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3 sm:px-6 lg:gap-6 lg:px-8">
+          <Link
+            to="/home"
+            aria-label="Flow Systems: what we do"
+            className={`-ml-2 flex size-11 shrink-0 items-center justify-center rounded-lg lg:hidden ${barFocus}`}
+          >
+            <BrandMark className="ring-1 ring-white/15" />
+          </Link>
           <div className="min-w-0 flex-1">
             <Link
               to="/home"
@@ -112,21 +120,13 @@ export default function Showcase() {
               </span>
               <span className="block text-xs text-stone-400">Sample enquiry forms, live on our lead engine</span>
             </Link>
-            <p className="text-[0.6875rem] leading-none font-semibold tracking-[0.16em] text-stone-400 uppercase lg:hidden">
-              {/* The pseudo-element stretches the tap area to 44px without moving the layout. */}
-              <Link
-                to="/home"
-                aria-label="Flow Systems: what we do"
-                className={`relative rounded-sm text-stone-200 underline decoration-white/30 underline-offset-[3px] before:absolute before:-inset-x-2 before:-inset-y-4 before:content-[''] ${barFocus}`}
-              >
-                Flow Systems
-              </Link>{' '}
-              · Sample forms
+            <p className="truncate text-[0.6875rem] leading-none font-semibold tracking-[0.14em] text-stone-400 uppercase lg:hidden">
+              Flow Systems
             </p>
-            <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm font-semibold lg:hidden">
+            <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-sm font-semibold lg:hidden">
               <Swatch config={config} className="ring-1 ring-white/30" />
               <span className="truncate">{config.studio.name}</span>
-              <span className="shrink-0 font-normal text-stone-400 tabular-nums">
+              <span className="shrink-0 text-xs font-normal text-stone-400 tabular-nums">
                 {index + 1} of {count}
               </span>
             </p>

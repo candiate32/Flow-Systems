@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type MouseEvent, type ReactNod
 import { Link } from 'react-router'
 import { displayClass, focusRing, primaryButtonClass } from '../forms/components/ui'
 import { loadThemeFonts, SHARED_TYPE, THEMES, themeStyle } from '../forms/themes'
+import { BrandMark } from '../home/BrandMark'
 import { auditWhatsappLink, WHY } from '../home/content'
 import { FormTabs } from '../home/FormTabs'
 import { HeroExchange } from '../home/HeroExchange'
@@ -30,20 +31,10 @@ function SectionLink({ to, className, children }: { to: string; className: strin
   )
 }
 
-function Mark() {
-  return (
-    <span aria-hidden="true" className="relative block size-8 rounded-[10px] bg-[var(--ff-accent)]">
-      <span className="absolute top-[7px] left-[8px] size-[5px] rounded-full bg-[#E8A58F]" />
-      <span className="absolute top-[14px] left-[18px] size-[4px] rounded-full bg-[#E6C27A]" />
-      <span className="absolute top-[20px] left-[9px] size-[6px] rounded-full bg-[#9CC3B6]" />
-    </span>
-  )
-}
-
 function Wordmark() {
   return (
     <span className="flex items-center gap-2.5">
-      <Mark />
+      <BrandMark />
       <span className={`${displayClass} text-[1.125rem] leading-none`}>Flow Systems</span>
     </span>
   )
