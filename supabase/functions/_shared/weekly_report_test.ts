@@ -18,6 +18,7 @@ import {
 } from "./weekly_report.ts";
 
 const ORG = "00000000-0000-4000-8000-000000000001";
+const USER = "11111111-0000-4000-8000-000000000001";
 
 const METRICS: WeeklyMetrics = {
   lead_count: 5,
@@ -35,17 +36,27 @@ Deno.test("weekly_summary is a template the provider interface knows", () => {
   assert((TEMPLATE_NAMES as readonly string[]).includes("weekly_summary"));
 });
 
-Deno.test("idempotency keys: weekly:<org>:<iso-week>, plus one per WhatsApp recipient and one for the email", () => {
+Deno.test("idempotency keys: weekly:<org>:<iso-week>, plus one per WhatsApp recipient and one per owner email", () => {
   assertEquals(weeklyReportIdempotencyKey(ORG, "2026-W41"), `weekly:${ORG}:2026-W41`);
   assertEquals(weeklySummaryWhatsAppKey(ORG, "2026-W41", "+919000000001"), `weekly:${ORG}:2026-W41:whatsapp:+919000000001`);
-  assertEquals(weeklyEmailIdempotencyKey(ORG, "2026-W41"), `weekly:${ORG}:2026-W41:email`);
+  assertEquals(weeklyEmailIdempotencyKey(ORG, "2026-W41", USER), `weekly:${ORG}:2026-W41:email:${USER}`);
 });
 
 Deno.test("parseWeeklyReportPayload accepts a Monday and its ISO week only", () => {
   assertEquals(parseWeeklyReportPayload({ week_start: "2026-10-05", iso_week: "2026-W41" }), {
     weekStart: "2026-10-05",
     isoWeek: "2026-W41",
+    report: null,
   });
+  // The snapshot the first run stores is read back as is.
+  const report = { org_name: "Studio", metrics: METRICS };
+  assertEquals(parseWeeklyReportPayload({ week_start: "2026-10-05", iso_week: "2026-W41", report })?.report, report);
+  assertEquals(
+    parseWeeklyReportPayload({ week_start: "2026-10-05", iso_week: "2026-W41", report: { org_name: "S", metrics: null } })
+      ?.report,
+    { org_name: "S", metrics: null },
+  );
+  assertEquals(parseWeeklyReportPayload({ week_start: "2026-10-05", iso_week: "2026-W41", report: { metrics: null } }), null);
   assertEquals(parseWeeklyReportPayload({ week_start: "2026-10-06", iso_week: "2026-W41" }), null, "a Tuesday");
   assertEquals(parseWeeklyReportPayload({ week_start: "2026-10-05", iso_week: "2026-W42" }), null, "wrong week");
   assertEquals(parseWeeklyReportPayload({ week_start: "2026-13-05", iso_week: "2026-W41" }), null);
@@ -134,13 +145,13 @@ const EMAIL = {
   subject: "S",
   text: "T",
   html: "<p>H</p>",
-  idempotencyKey: `weekly:${ORG}:2026-W41:email`,
+  idempotencyKey: `weekly:${ORG}:2026-W41:email:${USER}`,
 };
 
 Deno.test("sendResendEmail posts to Resend's /emails with the key, the idempotency key and the message", async () => {
   const captured: Captured[] = [];
-  const { id } = await sendResendEmail(EMAIL, fakeFetch(200, { id: "49a3999c-0ce1" }, captured));
-  assertEquals(id, "49a3999c-0ce1");
+  const result = await sendResendEmail(EMAIL, fakeFetch(200, { id: "49a3999c-0ce1" }, captured));
+  assertEquals(result, { status: "sent", id: "49a3999c-0ce1" });
   assertEquals(captured.length, 1);
   assertEquals(captured[0].url, "https://api.resend.com/emails");
   assertEquals(captured[0].init.method, "POST");
@@ -173,6 +184,13 @@ Deno.test("sendResendEmail: 429 and 5xx are retryable, other 4xx are permanent, 
   );
   assertEquals(err.permanent, false);
   assertStringIncludes(err.message, "connection reset");
+});
+
+Deno.test("sendResendEmail: a 409 idempotency conflict means the email with this key already went out", async () => {
+  for (const name of ["invalid_idempotent_request", "concurrent_idempotent_requests"]) {
+    const result = await sendResendEmail(EMAIL, fakeFetch(409, { name, message: "key already used" }, []));
+    assertEquals(result, { status: "already_sent", detail: `${name}: key already used` });
+  }
 });
 
 Deno.test("sendResendEmail refuses a 200 without an id", async () => {

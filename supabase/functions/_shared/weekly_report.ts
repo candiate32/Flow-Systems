@@ -16,21 +16,36 @@ export type WeeklyMetrics = {
   replied_by_lead_count: number;
 };
 
+/** An org member with role `owner`, who gets the report by email. */
+export type ReportOwner = { user_id: string; email: string };
+
 /** What public.weekly_report_data returns for an org that exists. */
 export type WeeklyReportData = {
   org_name: string;
   owner_alert_phones: string[];
-  owner_emails: string[];
+  owners: ReportOwner[];
   /** Null when the org had no enquiries that week. */
   metrics: WeeklyMetrics | null;
 };
 
-/** Payload of a `weekly_report` job, as private.enqueue_weekly_reports writes it. */
+/**
+ * What the report says, fixed on its first run and kept on the job's payload
+ * (`report`), so a retry sends exactly the same WhatsApp params and email
+ * body even if a late reply has changed the week's numbers since.
+ */
+export type WeeklyReportSnapshot = {
+  org_name: string;
+  metrics: WeeklyMetrics | null;
+};
+
+/** Payload of a `weekly_report` job, as private.enqueue_weekly_reports writes it, plus the snapshot once taken. */
 export type WeeklyReportPayload = {
   /** Monday of the reported week (IST), YYYY-MM-DD. */
   weekStart: string;
   /** ISO week of that Monday, e.g. 2026-W41. */
   isoWeek: string;
+  /** Set by the first run; absent before it. */
+  report: WeeklyReportSnapshot | null;
 };
 
 /** One report per org and week: weekly:<org>:<iso-week> (the job's key). */
@@ -43,9 +58,12 @@ export function weeklySummaryWhatsAppKey(orgId: string, isoWeek: string, phone: 
   return `${weeklyReportIdempotencyKey(orgId, isoWeek)}:whatsapp:${phone}`;
 }
 
-/** Sent as Resend's Idempotency-Key, so a retried request sends one email. */
-export function weeklyEmailIdempotencyKey(orgId: string, isoWeek: string): string {
-  return `${weeklyReportIdempotencyKey(orgId, isoWeek)}:email`;
+/**
+ * One email per owner: weekly:<org>:<iso-week>:email:<user_id>. Sent as
+ * Resend's Idempotency-Key, so a retried request sends one email.
+ */
+export function weeklyEmailIdempotencyKey(orgId: string, isoWeek: string, userId: string): string {
+  return `${weeklyReportIdempotencyKey(orgId, isoWeek)}:email:${userId}`;
 }
 
 const DAY_MS = 86_400_000;
@@ -74,7 +92,14 @@ export function parseWeeklyReportPayload(raw: unknown): WeeklyReportPayload | nu
   const start = parseDate(p.week_start);
   if (!start || start.getUTCDay() !== 1) return null;
   if (isoWeekOf(start) !== p.iso_week) return null;
-  return { weekStart: p.week_start, isoWeek: p.iso_week };
+  let report: WeeklyReportSnapshot | null = null;
+  if (p.report !== undefined) {
+    const r = p.report as Record<string, unknown> | null;
+    if (typeof r !== "object" || r === null || typeof r.org_name !== "string") return null;
+    if (r.metrics !== null && (typeof r.metrics !== "object" || Array.isArray(r.metrics))) return null;
+    report = { org_name: r.org_name, metrics: r.metrics as WeeklyMetrics | null };
+  }
+  return { weekStart: p.week_start, isoWeek: p.iso_week, report };
 }
 
 /** "7s", "4m 10s", "1h 5m", "2d 3h"; "n/a" when there is no value. */
@@ -206,17 +231,27 @@ export type EmailMessage = {
   idempotencyKey: string;
 };
 
+export type EmailSendResult =
+  | { status: "sent"; id: string }
+  /**
+   * Resend answered 409 for the idempotency key: a request with this key was
+   * already made (with another body, or is still in progress). The key is
+   * per owner and week, so that email went out; nothing to retry.
+   */
+  | { status: "already_sent"; detail: string };
+
 /**
  * Sends one email with Resend's REST API (POST /emails, Bearer key,
- * Idempotency-Key header). Returns Resend's email id. Throws EmailSendError.
+ * Idempotency-Key header). Returns Resend's email id, or `already_sent` on a
+ * 409 idempotency conflict. Throws EmailSendError for any other failure.
  * `fetchFn` is injectable so tests never reach the real API.
  */
-export function sendResendEmail(msg: EmailMessage, fetchFn: typeof fetch): Promise<{ id: string }> {
+export function sendResendEmail(msg: EmailMessage, fetchFn: typeof fetch): Promise<EmailSendResult> {
   if (!msg.to.length) throw new RangeError("an email needs at least one recipient");
   return post(msg, fetchFn);
 }
 
-async function post(msg: EmailMessage, fetchFn: typeof fetch): Promise<{ id: string }> {
+async function post(msg: EmailMessage, fetchFn: typeof fetch): Promise<EmailSendResult> {
   let res: Response;
   try {
     res = await fetchFn(RESEND_EMAILS_URL, {
@@ -233,11 +268,12 @@ async function post(msg: EmailMessage, fetchFn: typeof fetch): Promise<{ id: str
     throw new EmailSendError(`resend request failed: ${err instanceof Error ? err.message : String(err)}`, false);
   }
   const body = await res.json().catch(() => null) as { id?: unknown; name?: unknown; message?: unknown } | null;
+  const detail = [body?.name, body?.message].filter((x) => typeof x === "string").join(": ");
+  if (res.status === 409) return { status: "already_sent", detail: detail || "409 conflict" };
   if (!res.ok) {
-    const detail = [body?.name, body?.message].filter((x) => typeof x === "string").join(": ");
     const permanent = res.status >= 400 && res.status < 500 && res.status !== 429;
     throw new EmailSendError(`resend returned ${res.status}${detail ? ` (${detail})` : ""}`, permanent);
   }
   if (typeof body?.id !== "string" || !body.id) throw new EmailSendError("resend returned no email id", false);
-  return { id: body.id };
+  return { status: "sent", id: body.id };
 }

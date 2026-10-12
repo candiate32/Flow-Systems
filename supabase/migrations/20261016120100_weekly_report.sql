@@ -51,11 +51,12 @@ $$;
 revoke execute on function private.enqueue_weekly_reports(timestamptz, uuid) from public, anon, authenticated;
 
 -- Everything the weekly_report job needs for one org and week, in one call:
---   { org_name, owner_alert_phones: [...], owner_emails: [...],
+--   { org_name, owner_alert_phones: [...], owners: [{ user_id, email }],
 --     metrics: the org's lead_response_weekly row for the week, or null }
--- owner_emails are the sign-in emails of the org's members with role
--- `owner` (they read auth.users, hence service role only). Null when the org
--- does not exist.
+-- owners are the org's members with role `owner` and their sign-in emails
+-- (read from auth.users, hence service role only), ordered by user_id. Each
+-- gets their own email, so owners never see each other's addresses. Null
+-- when the org does not exist.
 create function private.weekly_report_data(p_org_id uuid, p_week_start date)
 returns jsonb
 language sql
@@ -65,8 +66,8 @@ as $$
   select jsonb_build_object(
     'org_name', o.name,
     'owner_alert_phones', to_jsonb(o.owner_alert_phones),
-    'owner_emails', coalesce((
-      select jsonb_agg(distinct u.email)
+    'owners', coalesce((
+      select jsonb_agg(jsonb_build_object('user_id', u.id, 'email', u.email) order by u.id)
         from public.org_members m
         join auth.users u on u.id = m.user_id
        where m.org_id = o.id

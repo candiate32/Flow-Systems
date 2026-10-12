@@ -79,8 +79,9 @@ select is(
   jsonb_build_object(
     'org_name', 'Weekly One',
     'owner_alert_phones', jsonb_build_array('+919700000101', '+919700000102'),
-    'owner_emails', jsonb_build_array('owner1@example.test')),
-  'weekly_report_data: org name, owner phones, and the emails of owners (not staff)');
+    'owners', jsonb_build_array(jsonb_build_object(
+      'user_id', 'eeeeeeee-0000-4000-8000-0000000000a1', 'email', 'owner1@example.test'))),
+  'weekly_report_data: org name, owner phones, and each owner (not staff) with their email');
 select is(
   public.weekly_report_data('eeeeeeee-0000-4000-8000-000000000001', '2026-10-05')
     -> 'metrics' ->> 'median_seconds_to_auto_reply',
