@@ -459,7 +459,7 @@ if (import.meta.main) {
     provider: getWhatsAppProvider(env),
     now: () => new Date(),
     verifyTurnstile: makeVerifyTurnstile(env),
-    canary: { secret: env("CANARY_SECRET"), phone: env("CANARY_PHONE") },
+    canary: { secret: env("CANARY_SECRET"), phone: env("CANARY_PHONE"), provider: env("WHATSAPP_PROVIDER") },
   };
   Deno.serve((req) => handler(req, deps));
 }

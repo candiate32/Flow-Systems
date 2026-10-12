@@ -43,6 +43,18 @@ Deno.test("canary verdict: allowed only on the canary org's source", () => {
   assertEquals(canaryVerdict(undefined, TOKEN, CANARY_SOURCE, "+916000123456"), { kind: "not_canary" });
 });
 
+Deno.test("canary verdict: a real provider without CANARY_PHONE refuses the token", () => {
+  const real = { secret: SECRET, provider: "gupshup" };
+  assertEquals(canaryVerdict(real, TOKEN, CANARY_SOURCE, "+916000123456"), {
+    kind: "refused",
+    reason: "CANARY_PHONE must be set when a real WhatsApp provider is configured",
+  });
+  assertEquals(canaryVerdict({ ...real, provider: "fake" }, TOKEN, CANARY_SOURCE, "+916000123456"), { kind: "allowed" });
+  assertEquals(canaryVerdict({ ...real, phone: "+916000123456" }, TOKEN, CANARY_SOURCE, "+916000123456"), {
+    kind: "allowed",
+  });
+});
+
 Deno.test("canary verdict: with CANARY_PHONE, only from that number", () => {
   const cfg = { secret: SECRET, phone: "98450 12345" };
   assertEquals(canaryVerdict(cfg, TOKEN, CANARY_SOURCE, "+919845012345"), { kind: "allowed" });

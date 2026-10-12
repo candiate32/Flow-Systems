@@ -30,7 +30,7 @@ export function isCanaryToken(token: string | null, secret: string | undefined):
 }
 
 /** ingest-form's view of the canary settings (function secrets). */
-export type CanaryPassConfig = { secret?: string; phone?: string };
+export type CanaryPassConfig = { secret?: string; phone?: string; provider?: string };
 
 export type CanaryVerdict =
   /** Not a canary token: run the normal Turnstile check. */
@@ -56,6 +56,9 @@ export function canaryVerdict(
     if (!expected || expected !== phone) {
       return { kind: "refused", reason: "canary token from a number other than CANARY_PHONE" };
     }
+  } else if (cfg?.provider && cfg.provider !== "fake") {
+    // Same rule as run-jobs: with a real provider the canary must use CANARY_PHONE.
+    return { kind: "refused", reason: "CANARY_PHONE must be set when a real WhatsApp provider is configured" };
   }
   return { kind: "allowed" };
 }

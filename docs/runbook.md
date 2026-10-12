@@ -291,7 +291,7 @@ select o.slug, private.start_canary(o.id) as result from orgs o where o.is_canar
 `result` is one of:
 
 - `scheduled`: a canary job was queued and runs within a minute.
-- `already scheduled`: one is already queued for this hour. If it doesn't run, the job runner itself is stuck (section 1.4).
+- `already scheduled`: this hour's canary job already exists. It may still be queued, or it may have already run (done) or died (dead). Check with `select status, last_error from jobs where kind = 'canary' order by run_at desc limit 1;`. If it is still `queued` well past its `run_at`, the job runner itself is stuck (section 1.4). If it is `done`, the run already queued the next hour's job, so nothing is needed. If it is `dead`, the hourly chain stopped: read `last_error`, fix the cause, and call `start_canary` again after the hour turns.
 - `missing vault secret`: `run_jobs_url` or `run_jobs_secret` is missing from Vault, so nothing calls `run-jobs` at all. Fix 1.3 first; the queued job then runs.
 
 No row means no org is marked as the canary (1.5).
