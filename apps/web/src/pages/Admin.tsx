@@ -2,9 +2,9 @@ import { adminUrl } from '../lib/config'
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { getSupabase } from '../lib/supabase'
-import { detailEntries, formatIst, replySeconds } from '../lib/format'
+import { detailEntries, formatIst } from '../lib/format'
 import type { Lead } from '../lib/types'
-import { formatDuration, secondsToFirstHumanReply, type AdminLead } from './admin/metrics'
+import { enquiryAt, formatDuration, secondsToAutoReply, secondsToFirstHumanReply, type AdminLead } from './admin/metrics'
 import WeekNumbers from './admin/WeekNumbers'
 
 const inputClass =
@@ -121,7 +121,7 @@ function LeadsTable() {
             <th className="px-3 py-2">Name</th>
             <th className="px-3 py-2">Phone</th>
             <th className="hidden px-3 py-2 sm:table-cell">BHK</th>
-            <th className="hidden px-3 py-2 sm:table-cell">Created (IST)</th>
+            <th className="hidden px-3 py-2 sm:table-cell">Enquiry (IST)</th>
             <th className="px-3 py-2 text-right">Auto-reply</th>
             <th className="px-3 py-2 text-right">Team reply</th>
           </tr>
@@ -132,14 +132,14 @@ function LeadsTable() {
               <td className="px-3 py-2">
                 {lead.name}
                 <div className="text-xs text-stone-500 sm:hidden">
-                  {lead.bhk ?? '—'} · {formatIst(lead.created_at)}
+                  {lead.bhk ?? '—'} · {formatIst(enquiryAt(lead).toISOString())}
                 </div>
                 <LeadDetails details={lead.details} />
               </td>
               <td className="whitespace-nowrap px-3 py-2">{lead.phone_e164}</td>
               <td className="hidden px-3 py-2 sm:table-cell">{lead.bhk ?? '—'}</td>
-              <td className="hidden whitespace-nowrap px-3 py-2 sm:table-cell">{formatIst(lead.created_at)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{replySeconds(lead)}</td>
+              <td className="hidden whitespace-nowrap px-3 py-2 sm:table-cell">{formatIst(enquiryAt(lead).toISOString())}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatDuration(secondsToAutoReply(lead))}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                 {formatDuration(secondsToFirstHumanReply(lead))}
               </td>

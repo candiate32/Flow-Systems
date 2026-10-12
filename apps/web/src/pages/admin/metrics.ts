@@ -56,6 +56,20 @@ export function enquiryAt(lead: Pick<AdminLead, 'created_at' | 'last_enquiry_at'
   return new Date(Math.min(new Date(lead.created_at).getTime(), new Date(lead.last_enquiry_at).getTime()))
 }
 
+/** Seconds from the first enquiry to `at`; null without `at` or when it is before the enquiry (not a reply to it). */
+function secondsFromEnquiry(lead: Pick<AdminLead, 'created_at' | 'last_enquiry_at'>, at: string | null): number | null {
+  if (!at) return null
+  const ms = new Date(at).getTime() - enquiryAt(lead).getTime()
+  return ms < 0 ? null : ms / 1000
+}
+
+/** Seconds from the first enquiry to the first auto-reply, as seconds_to_auto_reply in the view. */
+export function secondsToAutoReply(
+  lead: Pick<AdminLead, 'created_at' | 'last_enquiry_at' | 'first_auto_reply_at'>,
+): number | null {
+  return secondsFromEnquiry(lead, lead.first_auto_reply_at)
+}
+
 /**
  * Seconds from the first enquiry to the first human reply, or null when there
  * is none yet. A reply recorded before the enquiry is not a reply to it (null).
@@ -63,9 +77,7 @@ export function enquiryAt(lead: Pick<AdminLead, 'created_at' | 'last_enquiry_at'
 export function secondsToFirstHumanReply(
   lead: Pick<AdminLead, 'created_at' | 'last_enquiry_at' | 'first_human_reply_at'>,
 ): number | null {
-  if (!lead.first_human_reply_at) return null
-  const ms = new Date(lead.first_human_reply_at).getTime() - enquiryAt(lead).getTime()
-  return ms < 0 ? null : ms / 1000
+  return secondsFromEnquiry(lead, lead.first_human_reply_at)
 }
 
 /** "<1s", "7s", "4m 10s", "1h 5m", "2d 3h"; an em dash when there is no value. */

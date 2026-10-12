@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { enquiryAt, formatDuration, formatPercent, istWeekStart, secondsToFirstHumanReply, weekLabel } from './metrics'
+import {
+  enquiryAt,
+  formatDuration,
+  formatPercent,
+  istWeekStart,
+  secondsToAutoReply,
+  secondsToFirstHumanReply,
+  weekLabel,
+} from './metrics'
 
 describe('istWeekStart', () => {
   it('is the Monday of the IST week', () => {
@@ -55,6 +63,27 @@ describe('secondsToFirstHumanReply', () => {
 
   it('ignores a reply recorded before the enquiry', () => {
     expect(secondsToFirstHumanReply({ ...base, first_human_reply_at: '2026-10-12T04:00:00Z' })).toBeNull()
+  })
+})
+
+describe('secondsToAutoReply', () => {
+  it('counts a WhatsApp-first lead from its message, as the view does, not from when the row was created', () => {
+    // Message Sunday 23:59 IST; the row was created 2 minutes later, on Monday IST.
+    const lead = {
+      created_at: '2026-10-11T18:31:00Z',
+      last_enquiry_at: '2026-10-11T18:29:00Z',
+      first_auto_reply_at: '2026-10-11T18:31:05Z',
+    }
+    expect(enquiryAt(lead).toISOString()).toBe('2026-10-11T18:29:00.000Z')
+    expect(istWeekStart(enquiryAt(lead))).toBe('2026-10-05')
+    expect(secondsToAutoReply(lead)).toBe(125)
+  })
+
+  it('is null without an auto-reply, and for one recorded before the enquiry', () => {
+    const base = { created_at: '2026-10-12T04:30:00Z', last_enquiry_at: '2026-10-12T04:30:00Z' }
+    expect(secondsToAutoReply({ ...base, first_auto_reply_at: null })).toBeNull()
+    expect(secondsToAutoReply({ ...base, first_auto_reply_at: '2026-10-12T04:29:59Z' })).toBeNull()
+    expect(secondsToAutoReply({ ...base, first_auto_reply_at: '2026-10-12T04:30:07.4Z' })).toBe(7.4)
   })
 })
 

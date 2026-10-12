@@ -143,6 +143,30 @@ describe('admin page', () => {
     expect(mocks.client.auth.signOut).toHaveBeenCalled()
   })
 
+  it('shows a WhatsApp-first lead from its message time, as the metrics view counts it', async () => {
+    const whatsappFirst: AdminLead = {
+      id: '3',
+      name: 'Meera N',
+      phone_e164: '+919845012345',
+      bhk: null,
+      // Wrote Sunday 11 Oct 23:59 IST; the webhook created the row 2 minutes later (Monday IST).
+      created_at: '2026-10-11T18:31:00.000Z',
+      last_enquiry_at: '2026-10-11T18:29:00.000Z',
+      first_auto_reply_at: '2026-10-11T18:31:05.000Z',
+      first_human_reply_at: '2026-10-11T18:28:00.000Z', // a staff message from before the enquiry
+      details: {},
+    }
+    setup({ user: { email: 'owner@example.com' } }, { leads: { data: [whatsappFirst], error: null } })
+    const table = await screen.findByRole('table')
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toContain('Enquiry (IST)')
+    const [row] = within(table).getAllByRole('row').slice(1)
+    const cells = within(row).getAllByRole('cell').map((c) => c.textContent)
+    expect(cells[3]).toMatch(/11 Oct 2026/)
+    expect(cells[3]).toMatch(/11:59/)
+    expect(cells[4]).toBe('2m 5s') // 125 s from the message, not 5 s from the row
+    expect(cells[5]).toBe('—') // a reply before the enquiry is not a reply to it
+  })
+
   it("shows this week's numbers (IST week) above the lead list", async () => {
     setup({ user: { email: 'owner@example.com' } })
     const section = await screen.findByRole('region', { name: /This week/ })
