@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
 import { FORM_CONFIGS } from '../forms/configs'
 
@@ -13,12 +13,18 @@ function renderHome() {
       <App />
     </MemoryRouter>,
   )
-  return screen.findByRole('heading', { level: 1 })
+  // The page is large, so give its first render more than the default second on a busy runner.
+  return screen.findByRole('heading', { level: 1 }, { timeout: 5000 })
 }
 
 function panelForm(name: string) {
   return within(screen.getByRole('tabpanel')).getByRole('form', { name: `Enquiry form for ${name}` })
 }
+
+// Load the lazy page once up front, so the first test isn't racing a cold import on a busy runner.
+beforeAll(async () => {
+  await import('./Home')
+})
 
 beforeEach(() => {
   vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co')
