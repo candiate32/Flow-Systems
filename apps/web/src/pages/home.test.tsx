@@ -56,6 +56,18 @@ describe('/home', () => {
     await waitFor(() => expect(document.title).toBe('Flow Systems · Every enquiry answered in under a minute'))
   })
 
+  it('puts the sample forms straight after why it matters, before how it works', async () => {
+    await renderHome()
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Homeowners message several studios at once. The one that replies first, and keeps following up, often gets the site visit.',
+      'A form that looks like your studio.',
+      // The open sample form's own heading.
+      'Homes that feel like you, not a catalogue.',
+      'One package. We run it for you.',
+      'How fast does your studio really reply?',
+    ])
+  })
+
   it('keeps tech, provider and competitor names out of the copy', async () => {
     await renderHome()
     const text = document.body.textContent ?? ''
