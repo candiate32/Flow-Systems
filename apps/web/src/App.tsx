@@ -8,6 +8,8 @@ import Showcase from './pages/Showcase'
 const Admin = lazy(() => import('./pages/Admin'))
 // The home page loads on its own, so the form pages don't carry it.
 const Home = lazy(() => import('./pages/Home'))
+// Website v2 (spec 008): every service on one page, loaded on its own too.
+const HomeV2 = lazy(() => import('./pages/HomeV2'))
 
 function App() {
   return (
@@ -18,6 +20,14 @@ function App() {
         element={
           <Suspense fallback={<div className="min-h-dvh bg-[#EFEDE6]" />}>
             <Home />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/v2"
+        element={
+          <Suspense fallback={<div className="min-h-dvh bg-[#09090b]" />}>
+            <HomeV2 />
           </Suspense>
         }
       />
