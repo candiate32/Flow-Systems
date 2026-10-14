@@ -5,6 +5,7 @@ import {
   backoffMinutes,
   nextRunAt,
   opsAlertParams,
+  ownerAlertIdempotencyKey,
   parseSendMessagePayload,
 } from "./jobs.ts";
 
@@ -31,6 +32,13 @@ Deno.test("ack idempotency key is ack:<lead_id>:<enquiry iso>", () => {
   assertEquals(
     ackIdempotencyKey("1f0e", new Date("2026-10-11T10:00:00.000Z")),
     "ack:1f0e:2026-10-11T10:00:00.000Z",
+  );
+});
+
+Deno.test("owner alert idempotency key is owner_alert:<lead_id>:<enquiry iso>:<phone>", () => {
+  assertEquals(
+    ownerAlertIdempotencyKey("1f0e", new Date("2026-10-11T10:00:00.000Z"), "+919000000001"),
+    "owner_alert:1f0e:2026-10-11T10:00:00.000Z:+919000000001",
   );
 });
 

@@ -32,6 +32,11 @@ export function ackIdempotencyKey(leadId: string, enquiryAt: Date): string {
   return `ack:${leadId}:${enquiryAt.toISOString()}`;
 }
 
+/** One owner-alert retry per enquiry and owner phone: owner_alert:<lead_id>:<enquiry iso>:<phone>. */
+export function ownerAlertIdempotencyKey(leadId: string, enquiryAt: Date, phone: string): string {
+  return `owner_alert:${leadId}:${enquiryAt.toISOString()}:${phone}`;
+}
+
 /**
  * Inserts a job unless one with the same idempotency key exists. Returns the
  * new job's id, or null when the key was already taken (nothing enqueued).
