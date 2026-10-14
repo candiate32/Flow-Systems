@@ -8,7 +8,7 @@ select tables_are('public',
         'jobs', 'templates', 'audit_log']);
 
 select columns_are('public', 'orgs',
-  array['id', 'name', 'slug', 'timezone', 'owner_alert_phones', 'whatsapp_fallback_phone', 'is_demo', 'created_at']);
+  array['id', 'name', 'slug', 'timezone', 'owner_alert_phones', 'whatsapp_fallback_phone', 'is_demo', 'created_at', 'is_canary']);
 select columns_are('public', 'org_members', array['org_id', 'user_id', 'role', 'created_at']);
 select columns_are('public', 'sources', array['id', 'org_id', 'kind', 'name', 'public_key', 'created_at']);
 select columns_are('public', 'leads',
