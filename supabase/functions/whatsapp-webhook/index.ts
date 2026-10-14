@@ -39,7 +39,6 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must } from "../_shared/db.ts";
-import { scheduleFollowUps } from "../_shared/followups.ts";
 import { json } from "../_shared/http.ts";
 import { ackIdempotencyKey, enqueueJob, nextRunAt, opsAlertParams, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
 import { isOptOutMessage } from "../_shared/lead_activity.ts";
@@ -330,9 +329,11 @@ async function recordFailure(
 // --- A lead created by its first WhatsApp message -----------------------------
 
 /**
- * Same as for a form enquiry: acknowledge the person, alert the owners and
- * schedule the day 1/3/7 follow-ups from the time they wrote. Never throws:
- * the lead is recorded either way.
+ * Acknowledge the person and alert the owners, as for a form enquiry, but
+ * schedule no day 1/3/7 follow-ups: a WhatsApp-first lead never ticked a
+ * consent box, and follow-ups are templates they didn't ask for (Mourya's
+ * call, 14 Oct 2026). If they later submit the form, ingest-form schedules
+ * follow-ups as usual. Never throws: the lead is recorded either way.
  */
 async function welcomeNewLead(
   deps: Deps,
@@ -347,20 +348,7 @@ async function welcomeNewLead(
   const alertParams = [event.profileName ?? "WhatsApp enquiry", event.phone, "-", "-"];
   await Promise.all(source.org.owner_alert_phones.map((to) => alertOwner(deps, source.org_id, leadId, event.at, to, alertParams)));
 
-  try {
-    const { enqueued, cancelled } = await scheduleFollowUps(deps.db, leadId, event.at, deps.now());
-    await addEvent(deps, source.org_id, leadId, "followups_scheduled", { job_ids: enqueued, cancelled_job_ids: cancelled });
-  } catch (err) {
-    // As in ingest-form: without an alert this lead would silently get no follow-ups.
-    const error = errorMessage(err);
-    await addEvent(deps, source.org_id, leadId, "followups_schedule_failed", { error });
-    const alert = await sendOpsAlert(
-      deps.provider,
-      deps.env ?? (() => undefined),
-      opsAlertParams({ kind: "followups_schedule", id: leadId, attempts: 1 }, error),
-    );
-    await addEvent(deps, source.org_id, leadId, alert.type, alert.payload);
-  }
+  await addEvent(deps, source.org_id, leadId, "followups_skipped", { reason: "whatsapp_first" });
 }
 
 /**
