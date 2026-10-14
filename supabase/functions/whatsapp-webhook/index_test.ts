@@ -198,7 +198,7 @@ Deno.test("a signed empty batch is answered 200 without touching the database", 
 
 // --- Against the database ----------------------------------------------------------
 
-dbTest("inbound from an unknown number creates a lead, acknowledges it, alerts the owner and schedules follow-ups", async () => {
+dbTest("inbound from an unknown number creates a lead, acknowledges it, alerts the owner and schedules no follow-ups", async () => {
   const phone = uniquePhone();
   const provider = new FakeWhatsAppProvider();
   const d = deps({ provider });
@@ -244,15 +244,12 @@ dbTest("inbound from an unknown number creates a lead, acknowledges it, alerts t
       .eq("provider_message_id", provider.sent[0].providerMessageId).single();
     assertEquals(alert, { lead_id: null, to_phone: DEMO_OWNER, template_name: "owner_alert", status: "sent" });
 
-    // Follow-ups on day 1, 3 and 7 from the inbound time.
-    const jobs = await queuedFollowUps(l.id);
-    assertEquals(jobs.map((j) => [j.status, j.idempotency_key]), [1, 2, 3].map((k) => [
-      "queued",
-      followUpIdempotencyKey(l.id, k as 1 | 2 | 3, T),
-    ]));
+    // No day 1/3/7 follow-ups: a WhatsApp-first lead never ticked a consent box.
+    assertEquals(await queuedFollowUps(l.id), []);
 
-    const { data: events } = await db.from("events").select("type").eq("lead_id", l.id).order("id");
-    assertEquals(new Set(events!.map((e) => e.type)), new Set(["lead_created", "inbound_received", "ack_sent", "owner_alert_sent", "followups_scheduled"]));
+    const { data: events } = await db.from("events").select("type, payload").eq("lead_id", l.id).order("id");
+    assertEquals(new Set(events!.map((e) => e.type)), new Set(["lead_created", "inbound_received", "ack_sent", "owner_alert_sent", "followups_skipped"]));
+    assertEquals(events!.find((e) => e.type === "followups_skipped")?.payload, { reason: "whatsapp_first" });
 
     const row = await webhookRow(ev.id);
     assertExists(row?.processed_at);
@@ -601,7 +598,7 @@ dbTest("when the provider is down, the ack and owner alerts are queued as retry 
     ]);
     assertEquals((jobs![0].payload as { params: string[]; first_auto_reply: boolean }).params, ["Meera", DEMO_ORG_NAME]);
     assertEquals((jobs![0].payload as { first_auto_reply: boolean }).first_auto_reply, true);
-    assertEquals((await queuedFollowUps(l.id)).length, 3, "follow-ups are still scheduled");
+    assertEquals(await queuedFollowUps(l.id), [], "no follow-ups for a WhatsApp-first lead");
   } finally {
     await db.from("messages").delete().like("error", `%${RUN}%`);
     await cleanup();

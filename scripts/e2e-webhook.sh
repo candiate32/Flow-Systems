@@ -3,9 +3,9 @@
 # local stack and a served whatsapp-webhook function. Posts payloads signed
 # like the fake provider (HMAC-SHA256 of the body, keyed by
 # WHATSAPP_WEBHOOK_SECRET, in x-fake-signature) and checks the database:
-# bad signature, a new number creating a lead with its acknowledgement, owner
-# alert and follow-ups, a replay changing nothing, statuses only moving
-# forward, a staff echo cancelling follow-ups, and STOP.
+# bad signature, a new number creating a lead with its acknowledgement and
+# owner alert (no follow-ups for a WhatsApp-first lead), a replay changing
+# nothing, statuses only moving forward, a staff echo, and STOP.
 # The served function must have the same WHATSAPP_WEBHOOK_SECRET.
 # Usage: WHATSAPP_WEBHOOK_SECRET=... scripts/e2e-webhook.sh [function-url]
 set -euo pipefail
@@ -48,7 +48,7 @@ out=$(post "$BODY" "$(printf '0%.0s' {1..64})")
 [ "$(code_of "$out")" = 401 ] || fail "bad signature returned $(code_of "$out")"
 [ "$(sql "select count(*) from webhook_events where provider_event_id like '${RUN}%'")" = 0 ] || fail "stored a webhook with a bad signature"
 
-# 2. A new number: lead, acknowledgement, owner alert, follow-ups.
+# 2. A new number: lead, acknowledgement, owner alert, and no follow-ups.
 start=$(date +%s%N)
 out=$(post "$BODY")
 ms=$(( ($(date +%s%N) - start) / 1000000 ))
@@ -62,7 +62,8 @@ lead=$(sql "select id from leads where phone_e164 = '$E164' and org_id = '000000
 [ "$(sql "select count(*) from messages where lead_id = '$lead' and direction = 'outbound' and kind = 'session' and status = 'sent'")" = 1 ] \
   || fail "session acknowledgement"
 [ "$(sql "select count(*) from events where lead_id = '$lead' and type = 'owner_alert_sent'")" -ge 1 ] || fail "owner alert"
-[ "$(sql "select count(*) from jobs where lead_id = '$lead' and kind = 'followup' and status = 'queued'")" = 3 ] || fail "follow-ups"
+[ "$(sql "select count(*) from jobs where lead_id = '$lead' and kind = 'followup'")" = 0 ] || fail "follow-ups scheduled for a WhatsApp-first lead"
+[ "$(sql "select count(*) from events where lead_id = '$lead' and type = 'followups_skipped'")" = 1 ] || fail "followups_skipped event"
 [ "$(sql "select count(*) from webhook_events where provider_event_id = '${RUN}-in-1' and processed_at is not null")" = 1 ] \
   || fail "webhook event not stored and processed"
 
@@ -82,12 +83,12 @@ out=$(post "$(printf '{"events":[{"id":"%s-st-read","kind":"status","message_id"
 [ "$(code_of "$out")" = 200 ] || fail "status returned $(code_of "$out")"
 [ "$(sql "select status from messages where provider_message_id = '$ack'")" = read ] || fail "status is not read"
 
-# 5. A staff echo: first_human_reply_at, follow-ups cancelled.
+# 5. A staff echo: first_human_reply_at. (Cancelling follow-ups on an echo is
+# covered by the function's tests; a WhatsApp-first lead has none.)
 out=$(post "$(printf '{"events":[{"id":"%s-echo","kind":"echo","phone":"%s","text":"Our designer will call you at 4","at":"%s","message_id":"%s-echo-msg"}]}' \
   "$RUN" "$PHONE" "$AT" "$RUN")")
 [ "$(code_of "$out")" = 200 ] || fail "echo returned $(code_of "$out")"
 [ "$(sql "select first_human_reply_at is not null from leads where id = '$lead'")" = t ] || fail "first_human_reply_at"
-[ "$(sql "select count(*) from jobs where lead_id = '$lead' and kind = 'followup' and status = 'queued'")" = 0 ] || fail "echo did not cancel follow-ups"
 [ "$(sql "select count(*) from messages where lead_id = '$lead' and direction = 'echo'")" = 1 ] || fail "echo message"
 
 # 6. STOP opts out and sends nothing.
@@ -97,4 +98,4 @@ out=$(post "$(inbound "${RUN}-in-stop" "STOP")")
 [ "$(sql "select opted_out_at is not null from leads where id = '$lead'")" = t ] || fail "opted_out_at"
 [ "$(sql "select count(*) from messages where lead_id = '$lead' and direction = 'outbound'")" = "$outbound_before" ] || fail "sent after STOP"
 
-echo "PASS: signature, new lead + ack + alert + follow-ups (${ms}ms), replay, statuses, echo and STOP all correct"
+echo "PASS: signature, new lead + ack + alert, no follow-ups (${ms}ms), replay, statuses, echo and STOP all correct"
