@@ -1,9 +1,9 @@
-import { useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useId, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from 'react'
 import { FormStack } from '../forms/components/FormStack'
 import { FORM_CONFIGS } from '../forms/configs'
 import { resolveTheme } from '../forms/themes'
 import type { FormConfig } from '../forms/types'
-import { focus, material } from './hig'
+import { focus, materialThick } from './hig'
 import { prefersReducedMotion } from './motion'
 
 const LAYOUT_NAMES: Record<FormConfig['layout'], string> = { split: 'Split', card: 'Card', minimal: 'Minimal' }
@@ -29,6 +29,22 @@ function Arrow({ direction }: { direction: 'prev' | 'next' }) {
   )
 }
 
+/**
+ * Top of a focused field, counting its label: the field's own <label>, or the
+ * label of the group it sits in (chips, the month picker). Labels far above,
+ * like a form's heading, don't count.
+ */
+function fieldTop(el: HTMLElement, panel: HTMLElement) {
+  const own = el.getBoundingClientRect().top
+  const groupLabel = el.closest('[aria-labelledby]')?.getAttribute('aria-labelledby')?.split(' ') ?? []
+  const labels = [...((el as HTMLInputElement).labels ?? []), ...groupLabel.map((id) => document.getElementById(id))]
+  return labels.reduce((top, label) => {
+    if (!label || !panel.contains(label)) return top
+    const t = label.getBoundingClientRect().top
+    return t < top && own - t < 280 ? t : top
+  }, own)
+}
+
 const roundButton = [
   'flex size-11 shrink-0 items-center justify-center rounded-full text-hig-ink',
   'transition-[background-color,scale] hover:bg-black/[0.05] active:scale-95',
@@ -45,6 +61,7 @@ export function DesignPicker() {
   const uid = useId()
   const [active, setActive] = useState(FORM_CONFIGS[0].slug)
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
+  const bar = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const count = FORM_CONFIGS.length
   const index = FORM_CONFIGS.findIndex((c) => c.slug === active)
@@ -56,11 +73,24 @@ export function DesignPicker() {
     const to = (i + count) % count
     setActive(FORM_CONFIGS[to].slug)
     if (focusTab) tabs.current[to]?.focus()
-    // Switching while deep in a long form starts the new one from its top.
-    const el = frame.current
-    if (el && el.getBoundingClientRect().top < 0) {
-      el.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-    }
+    // Switching while deep in a long form starts the new one from its top, just below the pinned picker.
+    const top = frame.current?.getBoundingClientRect().top ?? 0
+    const pinnedBottom = bar.current?.getBoundingClientRect().bottom ?? 0
+    if (top < 0) window.scrollBy?.({ top: top - pinnedBottom - 12, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+  }
+
+  // Browsers don't scroll to a field that's already on screen, even when it sits under the
+  // pinned picker (Shift+Tab back up the form, say), so nudge it and its label clear.
+  function onFrameFocus(e: FocusEvent<HTMLDivElement>) {
+    const target = e.target
+    requestAnimationFrame(() => {
+      const panel = frame.current
+      const pinned = bar.current?.getBoundingClientRect()
+      if (!panel || !pinned || document.activeElement !== target) return
+      const top = fieldTop(target, panel)
+      const clear = pinned.bottom + 12
+      if (top < clear) window.scrollBy({ top: top - clear })
+    })
   }
 
   function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, i: number) {
@@ -75,7 +105,8 @@ export function DesignPicker() {
     <div>
       <div className="pointer-events-none sticky top-[3.25rem] z-30 py-2">
         <div
-          className={`pointer-events-auto mx-auto flex w-full items-center gap-1 sm:w-fit rounded-full border border-black/[0.06] p-1 shadow-[0_12px_32px_-14px_rgb(0_0_0/0.3)] sm:gap-1.5 sm:p-1.5 ${material}`}
+          ref={bar}
+          className={`pointer-events-auto mx-auto flex w-full max-w-full items-center gap-1 sm:w-fit rounded-full border border-black/[0.06] p-1 shadow-[0_12px_32px_-14px_rgb(0_0_0/0.3)] sm:gap-1.5 sm:p-1.5 ${materialThick}`}
         >
           <button type="button" onClick={() => select(index - 1, false)} aria-label={`Previous form: ${prev.studio.name}`} className={roundButton}>
             <Arrow direction="prev" />
@@ -105,15 +136,15 @@ export function DesignPicker() {
                   tabIndex={selected ? 0 : -1}
                   onClick={() => select(i, false)}
                   onKeyDown={(e) => onTabKeyDown(e, i)}
-                  className={`relative z-10 flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-full px-2 py-1 sm:flex-row sm:gap-2.5 sm:py-1.5 sm:pr-5 sm:pl-2 ${focus}`}
+                  className={`relative z-10 flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-full px-2 py-1 sm:py-2 md:flex-row md:gap-2 md:py-1.5 md:pr-4 md:pl-2 ${focus}`}
                 >
                   <DesignThumb config={c} />
-                  <span className="min-w-0 text-center leading-tight sm:text-left">
-                    <span className={`block truncate text-[0.8125rem] tracking-[-0.01em] text-hig-ink sm:text-[0.9375rem] ${selected ? 'font-semibold' : 'font-medium'}`}>
+                  <span className="min-w-0 text-center leading-tight md:text-left">
+                    <span className={`block text-[0.8125rem] tracking-[-0.01em] text-balance text-hig-ink sm:text-[0.9375rem] ${selected ? 'font-semibold' : 'font-medium'}`}>
                       <span className="sm:hidden">{c.studio.name.split(' ')[0]}</span>
                       <span className="hidden sm:inline">{c.studio.name}</span>
                     </span>
-                    <span className="hidden text-xs text-hig-ink-2 sm:block">
+                    <span className="hidden text-xs text-balance text-hig-ink/75 sm:block">
                       {theme.label} · {LAYOUT_NAMES[c.layout]} layout
                     </span>
                   </span>
@@ -132,8 +163,9 @@ export function DesignPicker() {
         role="tabpanel"
         id={panelId}
         aria-labelledby={`${uid}-tab-${active}`}
-        // Fields scrolled to by focus land below the nav and the pinned picker.
-        className="mt-3 scroll-mt-36 overflow-clip rounded-[1.25rem] border border-black/10 bg-white shadow-[0_40px_90px_-40px_rgb(0_0_0/0.35)] [&_:is(input,select,textarea,button,label)]:scroll-mt-40"
+        onFocus={onFrameFocus}
+        // Fields the browser scrolls to on focus land below the nav and the pinned picker.
+        className="mt-3 overflow-clip rounded-[1.25rem] border border-black/10 bg-white shadow-[0_40px_90px_-40px_rgb(0_0_0/0.35)] [&_:is(input,select,textarea,button,label)]:scroll-mt-40"
       >
         <div aria-hidden="true" className="flex h-11 items-center gap-3 border-b border-black/10 bg-[#F6F6F6] px-4">
           <span className="flex gap-2">

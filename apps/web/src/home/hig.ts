@@ -35,3 +35,6 @@ export const tile = 'rounded-[1.75rem] bg-white'
 
 /** Translucent, blurred bar material, like Safari's toolbar. */
 export const material = 'bg-white/72 backdrop-blur-xl backdrop-saturate-[1.8]'
+
+/** A thicker material for controls that pin over busy content, so their small text keeps its contrast. */
+export const materialThick = 'bg-white/85 backdrop-blur-xl backdrop-saturate-[1.8]'

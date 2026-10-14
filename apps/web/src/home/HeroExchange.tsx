@@ -51,7 +51,7 @@ function Typing({ delay }: { delay: number }) {
 /** A floating glass card beside the phone, like a callout on a product page. */
 function Callout({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-[1.25rem] border border-black/[0.06] bg-white/80 py-3 pr-4 pl-3 shadow-[0_20px_50px_-20px_rgb(0_0_0/0.3)] backdrop-blur-xl">
+    <div className="flex items-center gap-3 rounded-[1.25rem] border border-black/[0.06] bg-white/85 py-3 pr-4 pl-3 shadow-[0_20px_50px_-20px_rgb(0_0_0/0.3)] backdrop-blur-xl">
       {icon}
       <div className="leading-tight">
         <p className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-hig-ink">{title}</p>

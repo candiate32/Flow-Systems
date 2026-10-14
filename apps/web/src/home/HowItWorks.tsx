@@ -167,23 +167,28 @@ function FollowUpDays({ run }: { run: boolean }) {
   )
 }
 
-const BARS = [
-  { day: 'M', height: 40 },
-  { day: 'T', height: 64 },
-  { day: 'W', height: 50 },
-  { day: 'T', height: 86 },
-  { day: 'F', height: 70 },
-  { day: 'S', height: 34 },
-  { day: 'S', height: 58 },
-]
-
+/** Where a lead stands, in the order a lead moves through them. */
 const STAGES = [
-  { label: 'New', color: 'bg-[#0A84FF]' },
-  { label: 'Replied', color: 'bg-hig-tint' },
-  { label: 'Site visit', color: 'bg-[#F5B83D]' },
+  { key: 'fresh', label: 'New', color: 'bg-[#0A84FF]' },
+  { key: 'replied', label: 'Replied', color: 'bg-hig-tint' },
+  { key: 'visit', label: 'Site visit', color: 'bg-[#F5B83D]' },
+] as const
+
+/** Top to bottom inside a bar: newest on top, the replied bulk at the base. */
+const STACK = [STAGES[0], STAGES[2], STAGES[1]]
+
+/** Each day's enquiries split by where they stand, as shares of the chart's height. Made up. */
+const BARS: { day: string; visit: number; replied: number; fresh: number }[] = [
+  { day: 'M', visit: 10, replied: 30, fresh: 0 },
+  { day: 'T', visit: 18, replied: 46, fresh: 0 },
+  { day: 'W', visit: 12, replied: 38, fresh: 0 },
+  { day: 'T', visit: 22, replied: 60, fresh: 4 },
+  { day: 'F', visit: 14, replied: 50, fresh: 6 },
+  { day: 'S', visit: 0, replied: 26, fresh: 8 },
+  { day: 'S', visit: 0, replied: 36, fresh: 22 },
 ]
 
-/** A sample weekly report: bars that grow, and where leads stand. No numbers: it's an illustration. */
+/** A sample weekly report: each day's bar grows in, split by where its leads stand. No numbers: it's an illustration. */
 function ReportBars({ run }: { run: boolean }) {
   return (
     <div aria-hidden="true" className="mt-auto pt-8">
@@ -196,9 +201,11 @@ function ReportBars({ run }: { run: boolean }) {
           {BARS.map((b, i) => (
             <div key={i} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5">
               <span
-                style={{ height: `${b.height}%`, transitionDelay: `${i * 70}ms` }}
-                className={`w-full origin-bottom rounded-t-[0.4rem] rounded-b-[0.2rem] bg-hig-tint ${enter(run, 'scale-y-100', 'scale-y-0')}`}
-              />
+                style={{ height: `${b.visit + b.replied + b.fresh}%`, transitionDelay: `${i * 70}ms` }}
+                className={`flex w-full origin-bottom flex-col gap-px overflow-hidden rounded-t-[0.4rem] rounded-b-[0.2rem] ${enter(run, 'scale-y-100', 'scale-y-0')}`}
+              >
+                {STACK.map((s) => (b[s.key] > 0 ? <span key={s.key} style={{ flexGrow: b[s.key] }} className={s.color} /> : null))}
+              </span>
               <span className="text-[0.6875rem] text-hig-ink-2">{b.day}</span>
             </div>
           ))}
@@ -234,7 +241,7 @@ function AddOns({ run }: { run: boolean }) {
       <h3 className="mt-1.5 text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.025em] text-hig-ink sm:text-[2rem]">
         Add when you need them
       </h3>
-      <ul className="mt-7 mb-8 grid gap-x-8 gap-y-6 sm:grid-cols-2">
+      <ul className="mt-7 mb-8 grid gap-x-8 gap-y-6 @lg:grid-cols-2">
         {ADD_ONS.map((item, i) => (
           <li key={item.title} style={{ transitionDelay: `${150 + i * 90}ms` }} className={`flex gap-3.5 ${enter(run, 'translate-y-0 opacity-100', 'translate-y-2 opacity-0')}`}>
             <span aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-hig-tint-soft text-hig-tint">
@@ -303,7 +310,7 @@ export function HowItWorks() {
             </>
           )}
         </Tile>
-        <Tile className="lg:col-span-5">
+        <Tile className="md:col-span-2 lg:col-span-5">
           {(run) => (
             <>
               <TileHeader {...report} />
@@ -311,7 +318,7 @@ export function HowItWorks() {
             </>
           )}
         </Tile>
-        <Tile className="lg:col-span-7" delay={100}>
+        <Tile className="@container md:col-span-2 lg:col-span-7" delay={100}>
           {(run) => <AddOns run={run} />}
         </Tile>
       </ul>
