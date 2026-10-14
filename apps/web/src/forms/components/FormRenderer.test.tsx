@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { possessionYears } from '../formModel'
 import { THEMES } from '../themes'
@@ -248,7 +248,8 @@ describe('submitting', () => {
     expect(within(status).getByRole('heading', { name: "We've sent you a WhatsApp" })).toBeTruthy()
     expect(within(status).getByText('+91 98•••••345')).toBeTruthy()
     expect(status.textContent).not.toContain('9876543345')
-    expect(document.activeElement).toBe(within(status).getByRole('heading'))
+    // Focus moves in an effect, which can land just after the status first renders.
+    await waitFor(() => expect(document.activeElement).toBe(within(status).getByRole('heading')))
   })
 
   it('tells a returning visitor we already have their enquiry', async () => {
@@ -288,7 +289,7 @@ describe('submitting', () => {
     fireEvent.click(submitButton())
     expect(await screen.findByText('Server says no.')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toBe('Details can have at most 10 answers')
-    expect(document.activeElement).toBe(screen.getByLabelText('Mobile'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Mobile')))
     expect(submitButton()).toBeTruthy()
   })
 })
