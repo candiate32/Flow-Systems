@@ -8,6 +8,7 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { type Job, type JobKind, parseSendMessagePayload, PermanentJobError } from "../_shared/jobs.ts";
 import type { WhatsAppProvider } from "../_shared/whatsapp.ts";
+import { canary } from "./canary.ts";
 import { followUp } from "./followup.ts";
 
 export type JobOutcome =
@@ -20,6 +21,9 @@ export type JobContext = {
   provider: WhatsAppProvider;
   now: () => Date;
   addEvent: (job: Job, type: string, payload?: Record<string, Json>) => Promise<void>;
+  env: (k: string) => string | undefined;
+  /** Sends the ops_alert template to OPS_ALERT_PHONE. Never throws. */
+  alertOps: (job: Job, error: string) => Promise<void>;
 };
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<JobOutcome | void>;
@@ -150,5 +154,5 @@ export const defaultHandlers: Record<JobKind, JobHandler> = {
   send_message: sendMessage,
   followup: followUp,
   weekly_report: notYet("weekly_report"),
-  canary: notYet("canary"),
+  canary,
 };

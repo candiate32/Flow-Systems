@@ -291,7 +291,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
   await purgeTestJobs();
   const ids: string[] = [];
   try {
-    for (const kind of ["weekly_report", "canary"]) {
+    for (const kind of ["weekly_report"]) {
       ids.push((await enqueueJob(db, {
         org_id: DEMO_ORG,
         kind,
@@ -301,7 +301,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
     }
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
-    assertEquals(summary.dead, 2);
+    assertEquals(summary.dead, 1);
     for (const id of ids) {
       const job = await jobRow(id);
       assertEquals(job.status, "dead");

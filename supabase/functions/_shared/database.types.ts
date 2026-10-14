@@ -3,25 +3,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type Database = {
   
-  "graphql_public": {
-          Tables: {
-            [_ in never]: never
-          }
-          Views: {
-            [_ in never]: never
-          }
-          Functions: {
-            "graphql":
-{ Args: { "extensions"?: Json,"operationName"?: string,"query"?: string,"variables"?: Json }; Returns: Json
-                           }
-          }
-          Enums: {
-            [_ in never]: never
-          }
-          CompositeTypes: {
-            [_ in never]: never
-          }
-        },"public": {
+  "public": {
           Tables: {
             "audit_log": {
                   Row: {
@@ -175,14 +157,14 @@ isOneToOne: false
                   ]
                 },"orgs": {
                   Row: {
-                    "created_at": string,"id": string,"is_demo": boolean,"name": string,"owner_alert_phones": (string)[],"slug": string,"timezone": string,"whatsapp_fallback_phone": string | null
+                    "created_at": string,"id": string,"is_canary": boolean,"is_demo": boolean,"name": string,"owner_alert_phones": (string)[],"slug": string,"timezone": string,"whatsapp_fallback_phone": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"id"?: string,"is_demo"?: boolean,"name": string,"owner_alert_phones"?: (string)[],"slug": string,"timezone"?: string,"whatsapp_fallback_phone"?: string | null
+                    "created_at"?: string,"id"?: string,"is_canary"?: boolean,"is_demo"?: boolean,"name": string,"owner_alert_phones"?: (string)[],"slug": string,"timezone"?: string,"whatsapp_fallback_phone"?: string | null
                   }
                   Update: {
-                    "created_at"?: string,"id"?: string,"is_demo"?: boolean,"name"?: string,"owner_alert_phones"?: (string)[],"slug"?: string,"timezone"?: string,"whatsapp_fallback_phone"?: string | null
+                    "created_at"?: string,"id"?: string,"is_canary"?: boolean,"is_demo"?: boolean,"name"?: string,"owner_alert_phones"?: (string)[],"slug"?: string,"timezone"?: string,"whatsapp_fallback_phone"?: string | null
                   }
                   Relationships: [
                     
@@ -278,6 +260,9 @@ isOneToOne: false
         isOneToOne: false
         isSetofReturn: true
       } },
+"delete_lead":
+{ Args: { "lead": string }; Returns: boolean
+                           },
 "process_whatsapp_event":
 { Args: { "p_as_of"?: string,"p_event": Json,"p_source_id": string,"p_webhook_event_id": number }; Returns: Json
                            },
@@ -406,11 +391,7 @@ export type CompositeTypes<
   : never
 
 export const Constants = {
-  "graphql_public": {
-          Enums: {
-            
-          }
-        },"public": {
+  "public": {
           Enums: {
             
           }
