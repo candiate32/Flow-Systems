@@ -154,6 +154,8 @@ function bench(opts: {
     provider: new FakeWhatsAppProvider(),
     now: () => clock.t,
     env: (k) => env[k as keyof typeof env],
+    // The canary posts through its own deps (above); the job context's fetch is for Resend.
+    fetch: () => Promise.reject(new Error("the canary must not use ctx.fetch")),
     addEvent: (_job, type, payload = {}) => {
       events.push({ type, payload });
       return Promise.resolve();

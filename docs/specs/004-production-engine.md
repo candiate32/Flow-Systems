@@ -113,6 +113,23 @@ Left for slice F (real provider):
 2. A `weekly_report` job per org runs Mondays at 09:00 IST (pg_cron at 03:30 UTC). It sends a `weekly_summary` template to each owner phone, plus an email through Resend when `RESEND_API_KEY` is set. An email failure doesn't block the WhatsApp send. Re-running the same week sends nothing (idempotency key `weekly:<org>:<iso-week>`).
 3. `/admin` shows this week's numbers above the lead list, and each lead's time to first human reply.
 
+Built as (slice D):
+- Two views, both `security_invoker`: `lead_response_metrics` (per lead) and `lead_response_weekly` (per org per ISO week, Monday 00:00 to Sunday 23:59:59 IST, with `week_start`, `week_end` and `iso_week` like `2026-W41`). A separate view, not a function, so `/admin` and the job read it the same way. Members can select both; anon can't.
+- A lead's enquiry time is its first enquiry, `least(created_at, last_enquiry_at)`. That keeps a form lead's first enquiry after a repeat, and uses the message time for a lead who wrote first on WhatsApp. A lead counts in the week of its first enquiry only, since the reply times are set once per lead.
+- A reply recorded before the enquiry (a late or earlier echo) is ignored: its seconds are null, not negative or zero. "Replied by lead" means `last_inbound_at` strictly after the enquiry, so a WhatsApp-first lead's own message is not a reply.
+- Medians and p90 use `percentile_cont` (linear interpolation), rounded to 0.1 s, over the leads that got that reply. The 1-hour % is over all of the week's leads, and exactly 3600 s counts.
+- Cron `weekly-report` (`30 3 * * 1`) calls `private.enqueue_weekly_reports()`. It queues one `weekly_report` job per org, except the canary org (`is_canary`), for the week before the current IST week, so a late run still reports the right week. Payload: `{ week_start, iso_week }`.
+- The job reads `public.weekly_report_data` (service role only) and queues one `send_message` job per owner phone with `weekly_summary`, keyed `weekly:<org>:<iso-week>:whatsapp:<phone>`. The sends go through the existing exactly-once path, with retries, dead letters and the owner-phone check. run-jobs now claims until a round comes back empty, so they go out in the same run.
+- The first run stores the org name and the week's numbers on the job's payload (`report`). Retries render the WhatsApp params and the email from that snapshot, so a late reply can't change what is sent under the same keys.
+- Each member with role `owner` gets their own email at their sign-in address, so owners never see each other's addresses. It is sent only when `RESEND_API_KEY` is set, from `RESEND_FROM`, which defaults to Resend's `onboarding@resend.dev` and must be a verified-domain address in production. Each carries `Idempotency-Key: weekly:<org>:<iso-week>:email:<user_id>`, and an owner with a `weekly_email_sent` event for the week is skipped.
+- The WhatsApp jobs are queued before any email is tried, so an email failure never blocks them. If one owner's email fails, the others are still sent, then the report job fails: 429, 5xx or a network error retries with backoff, and the retry emails only the owners still missing. If every failure is another 4xx, the job is dead-lettered and ops are alerted. A 409 from Resend (key already used or in progress) is logged and recorded as `weekly_email_sent` with `already_sent`: no retry, no alert. A retry queues no new WhatsApp sends.
+- A week without enquiries still sends, with zeros and "n/a".
+- `/admin` reads the current IST week's row and the member's orgs with the user's session (RLS). An org without enquiries this week shows zeros. Org names show only when the member has more than one org. In the lead list, "Enquiry (IST)", "Auto-reply" and the new "Team reply" column use the view's rules: time from the first enquiry, and nothing for a reply recorded before it.
+- `scripts/e2e-weekly.sh` (CI, after the webhook check) runs the cron function and run-jobs end to end.
+
+Left for later:
+- Owner emails come from `org_members` with role `owner`. If studios want reports at addresses that never sign in, that needs an `orgs.report_emails` column, set by onboard-org.
+
 **E. Operations**
 1. `deno run -A scripts/onboard-org.ts <config.json>` creates or updates an org, its sources, templates and owner contacts. It is idempotent (run twice = same rows) and validated with clear errors. There is a sample `onboarding/demo-interiors.json`.
 2. Canary:

@@ -74,6 +74,31 @@ export function renderInboundAck(params: readonly string[]): string {
   return fillText("inbound_ack", INBOUND_ACK_TEXT, params);
 }
 
+/**
+ * The weekly report to a studio's owner phones (spec 004, D.2), sent as the
+ * `weekly_summary` utility template. Owners are the studio, not leads, so it
+ * has no opt-out line. Params come from weeklySummaryParams in
+ * weekly_report.ts.
+ */
+export const WEEKLY_SUMMARY_TEXT: TemplateText = {
+  body: "{{1}}: your enquiries for {{2}}. New enquiries: {{3}}. " +
+    "WhatsApp auto-reply: median {{4}}, 90% within {{5}}. " +
+    "First reply from your team: median {{6}}; {{7}} answered within 1 hour.",
+  params: [
+    "studio_name",
+    "week",
+    "lead_count",
+    "auto_reply_median",
+    "auto_reply_p90",
+    "human_reply_median",
+    "human_reply_within_1h_pct",
+  ],
+};
+
+export function renderWeeklySummary(params: readonly string[]): string {
+  return fillText("weekly_summary", WEEKLY_SUMMARY_TEXT, params);
+}
+
 function fillText(
   name: string,
   t: TemplateText,
