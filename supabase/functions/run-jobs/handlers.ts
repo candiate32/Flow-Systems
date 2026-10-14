@@ -1,20 +1,29 @@
 // Job handlers, one per kind. A handler returns normally (job done), returns
-// `{ status: "cancelled" }`, or throws: a plain Error is retried with backoff,
-// a PermanentJobError dead-letters the job at once.
+// `{ status: "cancelled" }` or `{ status: "deferred", runAt }` (back to the
+// queue without using up an attempt), or throws: a plain Error is retried with
+// backoff, a PermanentJobError dead-letters the job at once.
 // deno-lint-ignore no-import-prefix -- see index.ts
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { type Job, type JobKind, parseSendMessagePayload, PermanentJobError } from "../_shared/jobs.ts";
 import type { WhatsAppProvider } from "../_shared/whatsapp.ts";
+import { canary } from "./canary.ts";
+import { followUp } from "./followup.ts";
 
-export type JobOutcome = { status: "done" } | { status: "cancelled"; reason: string };
+export type JobOutcome =
+  | { status: "done" }
+  | { status: "cancelled"; reason: string }
+  | { status: "deferred"; runAt: Date; reason: string };
 
 export type JobContext = {
   db: SupabaseClient<Database>;
   provider: WhatsAppProvider;
   now: () => Date;
   addEvent: (job: Job, type: string, payload?: Record<string, Json>) => Promise<void>;
+  env: (k: string) => string | undefined;
+  /** Sends the ops_alert template to OPS_ALERT_PHONE. Never throws. */
+  alertOps: (job: Job, error: string) => Promise<void>;
 };
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<JobOutcome | void>;
@@ -28,8 +37,8 @@ export type JobHandler = (job: Job, ctx: JobContext) => Promise<JobOutcome | voi
  * - `owner_alert` goes to one of the org's owner_alert_phones. The job's
  *   lead_id is the lead the alert is about (so deleting the lead removes the
  *   job); the message itself has no lead_id, as for inline owner alerts.
- * - every other template goes to the job's lead, at the phone the lead gave
- *   and only with consent.
+ * - every other template goes to the job's lead, at the phone the lead gave,
+ *   only with consent and never after an opt-out.
  */
 export const sendMessage: JobHandler = async (job, ctx) => {
   const { db, provider, now } = ctx;
@@ -109,15 +118,16 @@ export const sendMessage: JobHandler = async (job, ctx) => {
 /** Event names match the ones ingest-form writes for inline sends. */
 const SENT_EVENT: Partial<Record<string, string>> = { enquiry_ack: "ack_sent", owner_alert: "owner_alert_sent" };
 
-/** Only message people who gave consent, at the number they gave. */
+/** Only message people who gave consent and have not opted out, at the number they gave. */
 async function checkLeadRecipient(job: Job, to: string, db: JobContext["db"]): Promise<JobOutcome | null> {
   if (!job.lead_id) throw new PermanentJobError("a message to a lead needs the job's lead_id");
   const lead = must(
-    await db.from("leads").select("phone_e164, consent_at").eq("id", job.lead_id).maybeSingle(),
+    await db.from("leads").select("phone_e164, consent_at, opted_out_at").eq("id", job.lead_id).maybeSingle(),
     "find lead",
   );
   if (!lead) return { status: "cancelled", reason: "lead no longer exists" };
   if (!lead.consent_at) return { status: "cancelled", reason: "lead has not given consent" };
+  if (lead.opted_out_at) return { status: "cancelled", reason: "lead opted out" };
   if (lead.phone_e164 !== to) throw new PermanentJobError("recipient is not the lead's phone");
   return null;
 }
@@ -142,7 +152,7 @@ const notYet = (kind: JobKind): JobHandler => () => {
 
 export const defaultHandlers: Record<JobKind, JobHandler> = {
   send_message: sendMessage,
-  followup: notYet("followup"),
+  followup: followUp,
   weekly_report: notYet("weekly_report"),
-  canary: notYet("canary"),
+  canary,
 };

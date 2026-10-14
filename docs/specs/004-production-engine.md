@@ -79,6 +79,24 @@ New tables get RLS, plus a test that org A can't read org B's rows.
 5. An echo sets `first_human_reply_at` if empty and stores an `echo` message.
 6. A status event updates `messages.status` (`sent` → `delivered` → `read`, never backwards) or marks it `failed`.
 
+Built as (slice C):
+- The webhook adapter is in `_shared/whatsapp_webhook.ts` (sending stays in `whatsapp.ts`). Its header maps Meta's payload, including `smb_message_echoes`, onto `NormalizedEvent`.
+- Routing: each org's number posts to `whatsapp-webhook?source=<public_key>` of its `whatsapp_inbound` source. The demo org's key is `demo-whatsapp-inbound`. An unknown source gets 404 after the events are stored, so the provider retries once it is fixed.
+- One SQL function, `process_whatsapp_event`, applies an event and sets `processed_at` in one transaction. That includes the follow-up cancel or opt-out (B.3).
+- A failed event is recorded (`attempts`, counted in SQL, and `processing_error`) and the delivery gets 500, so the provider resends it. Processed events come back as duplicates. After 3 failed attempts the event is a dead letter (`webhook_event_failed`), ops get an `ops_alert`, and the delivery gets 200.
+- A lead created by its first message gets an acknowledgement. Inside the 24-hour window of that message (measured from when it was sent, not when the webhook arrived) it is the session text; outside, it is the `enquiry_ack` template. `first_auto_reply_at` is set either way. It gets no day 1/3/7 follow-ups (Mourya, 14 Oct 2026): it never ticked a consent box, and follow-ups are templates it didn't ask for. A `followups_skipped` event records this. If the person later submits the form, follow-ups start as usual. An opt-out sends nothing, not even a confirmation.
+- Every echo moves `leads.last_human_reply_at` forward, and follow-ups are skipped when it is after their enquiry. `first_human_reply_at` stays set-once for metrics.
+- `failed` replaces `sent`; a later `delivered` or `read` wins over `failed` and clears its error.
+- Deleting a lead redacts the webhook rows routed to it. It also redacts rows that carry its phone but no lead, in its org or not routed to any org. Rows not yet processed are closed as processed (outcome `deleted`), so a provider retry is a duplicate and can't recreate the lead.
+- A dead letter is reported once. Only the delivery whose atomic attempt count reaches 3 writes `webhook_event_failed` and alerts ops; later deliveries just get 200.
+- A late-delivered old message only answers enquiries up to its own time. An inbound or echo cancels only follow-ups whose `enquiry_at` is at or before the message time. An echo older than the lead's first enquiry sets no reply time. A late STOP is still honoured whatever its time, to err on the side of consent.
+
+Left for slice F (real provider):
+- One malformed event makes the whole delivery invalid: it is stored as one `invalid` row and none of its events are processed.
+- `webhook_events.payload` is the event's own JSON, not the delivery envelope (Meta's `metadata`, `contacts`).
+- A `failed` status that arrives before its outbound message row exists is ignored.
+- The welcome (acknowledgement, owner alerts, follow-ups) runs after the event's transaction commits, so a crash in between loses it.
+
 **D. Metrics and report**
 1. The view `lead_response_metrics` (`security_invoker`) gives per lead:
    - seconds to auto-reply;
@@ -126,4 +144,4 @@ Max 3 review rounds per slice. Behaviour, the items above, security (secrets, RL
 - **Scheduler.** `pg_cron` + `pg_net` calling `run-jobs`, rather than Supabase Queues/pgmq. A plain table is easier to inspect, test and dead-letter.
 - **Ops alerts.** Ops alerts go to `OPS_ALERT_PHONE` (Mourya) as an `ops_alert` template, and are also recorded as `events`. Email ops alerts wait for Resend.
 - **Follow-up timing.** Follow-up send time is 11:00 IST, as in the demo slice. No sends between 21:00 and 09:00 IST: a job due in that window moves to 09:00.
-- **Opt-out.** Opt-out keywords are `STOP` and `UNSUBSCRIBE`.
+- **Opt-out.** Opt-out keywords are `STOP` and `UNSUBSCRIBE`. An opt-out holds against everything the engine sends on its own: follow-ups, retries and any other queued message. Only a fresh form submission with the consent box ticked (a new enquiry, not a duplicate within 24 hours) counts as opting back in. It clears `opted_out_at` and logs `lead_opted_in` with `previous_opted_out_at`, and then the acknowledgement and follow-ups run as usual.

@@ -33,12 +33,16 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check supabase/functions/*/index.ts
-      - run: deno test -A supabase/functions
+      - run: deno check supabase/functions/*/index.ts scripts/onboard-org.ts
+      - run: deno test -A supabase/functions scripts
 
   database:
     name: Database and end to end (supabase test db, ingest-form)
     runs-on: ubuntu-latest
+    env:
+      # Test-only secret for the fake WhatsApp provider's webhook signature.
+      # functions serve gets it through an env file; scripts/e2e-webhook.sh signs with it.
+      WHATSAPP_WEBHOOK_SECRET: ci-fake-webhook-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,10 +59,11 @@ jobs:
       - name: Edge Function tests against the local database
         run: |
           eval "$(npx supabase status -o env | grep -E '^SERVICE_ROLE_KEY=')"
-          SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" deno test -A supabase/functions
+          SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" deno test -A supabase/functions scripts
       - name: End to end through supabase functions serve
         run: |
-          npx supabase functions serve > functions.log 2>&1 &
+          printf 'WHATSAPP_WEBHOOK_SECRET=%s\n' "$WHATSAPP_WEBHOOK_SECRET" > "$RUNNER_TEMP/functions.env"
+          npx supabase functions serve --env-file "$RUNNER_TEMP/functions.env" > functions.log 2>&1 &
           for i in $(seq 1 180); do grep -q "Serving functions on" functions.log && break; sleep 1; done
           grep -q "Serving functions on" functions.log || { echo "::error title=functions serve::never started"; exit 1; }
           # Then wait for a 200 from the function itself (Kong answers OPTIONS on its own).
@@ -75,6 +80,9 @@ jobs:
       # Spec 004, A.7: 100 concurrent enquiries against the same functions serve.
       - name: Burst of 100 enquiries
         run: scripts/burst.sh
+      # Spec 004, C: signed fake webhooks through the same functions serve.
+      - name: WhatsApp webhook end to end
+        run: scripts/e2e-webhook.sh
       - if: failure()
         name: Show function logs
         run: |

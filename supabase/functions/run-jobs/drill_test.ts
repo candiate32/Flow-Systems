@@ -73,7 +73,13 @@ dbTest("failure drill: provider down for the first 27 calls, every ack and owner
     assertEquals(provider.calls.length, JOBS);
     assert(provider.calls.every((c) => !c.ok));
 
-    const { data: jobs } = await db.from("jobs").select("*").in("lead_id", leadIds);
+    // Each enquiry also queues its day 1/3/7 follow-ups (slice B); the first is
+    // due the next day at 11:00 IST, after this drill's three hours.
+    const { data: followUps } = await db.from("jobs").select("*").in("lead_id", leadIds).eq("kind", "followup");
+    assertEquals(followUps!.length, 3 * K);
+    assert(followUps!.every((j) => j.status === "queued" && new Date(j.run_at).getTime() > T0.getTime() + 602 * MIN));
+
+    const { data: jobs } = await db.from("jobs").select("*").in("lead_id", leadIds).eq("kind", "send_message");
     assertEquals(jobs!.length, JOBS, "one retry job per failed ack and per failed owner alert");
     assert(jobs!.every((j) => j.status === "queued" && j.attempts === 0));
     assert(jobs!.every((j) => new Date(j.run_at).getTime() === T0.getTime() + MIN));
@@ -107,7 +113,7 @@ dbTest("failure drill: provider down for the first 27 calls, every ack and owner
     assertEquals(attemptCounts.sort(), [3, 3, 3, 3, 3, 4, 4, 4]);
 
     // 4. The database agrees: jobs done, one message per job, linked to it.
-    const { data: after } = await db.from("jobs").select("*").in("lead_id", leadIds);
+    const { data: after } = await db.from("jobs").select("*").in("lead_id", leadIds).eq("kind", "send_message");
     assertEquals(after!.length, JOBS);
     for (const job of after!) {
       assertEquals(job.status, "done");
@@ -152,7 +158,7 @@ dbTest("failure drill: provider down for the first 27 calls, every ack and owner
     await tickEveryMinute({ db, provider, env: () => undefined }, clock, 600, 602);
     assertEquals(provider.calls.length, callsBefore);
     const { count: open } = await db.from("jobs").select("id", { count: "exact", head: true })
-      .in("lead_id", leadIds).in("status", ["queued", "running", "dead"]);
+      .in("lead_id", leadIds).eq("kind", "send_message").in("status", ["queued", "running", "dead"]);
     assertEquals(open, 0);
     const ownerOk = provider.calls.filter((c) => c.template === "owner_alert" && c.ok);
     assertEquals(ownerOk.length, K * OWNER_PHONES, "each owner alert delivered once");

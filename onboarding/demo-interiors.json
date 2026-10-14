@@ -1,0 +1,31 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "slug": "demo-interiors",
+  "name": "Lime & Lattice, Sarjapur Road",
+  "timezone": "Asia/Kolkata",
+  "is_demo": true,
+  "is_canary": false,
+  "owner_alert_phones": ["+919000000001"],
+  "whatsapp_fallback_phone": "+919000000001",
+  "sources": [
+    {
+      "kind": "web_form",
+      "name": "Demo landing page form",
+      "public_key": "demo-web-form"
+    }
+  ],
+  "templates": [
+    {
+      "name": "enquiry_ack",
+      "language": "en",
+      "body": "Hi {{1}}, thank you for your enquiry with {{2}}. Our designer will call you shortly to plan your free consultation.",
+      "param_names": ["first_name", "studio_name"]
+    },
+    {
+      "name": "owner_alert",
+      "language": "en",
+      "body": "New enquiry from {{1}} ({{2}}): {{3}}, possession {{4}}. Reply on WhatsApp within the hour.",
+      "param_names": ["lead_name", "lead_phone", "bhk", "possession_month"]
+    }
+  ]
+}

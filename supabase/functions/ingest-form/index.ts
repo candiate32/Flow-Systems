@@ -1,6 +1,7 @@
 // ingest-form: the public enquiry form endpoint (docs/specs/002-demo-slice.md,
 // "ingest-form"). Validates the enquiry, saves the lead, sends the WhatsApp
-// acknowledgement and owner alerts, and logs every step to `events`.
+// acknowledgement and owner alerts, schedules the day 1/3/7 follow-ups
+// (spec 004, B.1), and logs every step to `events`.
 // Full specifier on purpose: `deno check`/`deno test` from the repo root don't
 // read this folder's deno.json, and the root package.json would otherwise make
 // Deno look for the package in node_modules (absent in CI's functions job).
@@ -10,8 +11,12 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { isDuplicateEnquiry } from "../_shared/dedupe.ts";
 import { parseEnquiry } from "../_shared/enquiry.ts";
+import { scheduleFollowUps } from "../_shared/followups.ts";
 import { handleOptions, json } from "../_shared/http.ts";
-import { ackIdempotencyKey, enqueueJob, nextRunAt, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
+import { ackIdempotencyKey, enqueueJob, nextRunAt, opsAlertParams, ownerAlertIdempotencyKey } from "../_shared/jobs.ts";
+import { type CanaryPassConfig, type CanaryVerdict, canaryVerdict, isCanaryToken } from "../_shared/canary.ts";
+import { captureException } from "../_shared/monitoring.ts";
+import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import {
   getWhatsAppProvider,
   type TemplateName,
@@ -24,6 +29,10 @@ export type Deps = {
   provider: WhatsAppProvider;
   now: () => Date;
   verifyTurnstile: (token: string | null) => Promise<boolean>;
+  /** The hourly canary's pass (CANARY_SECRET, CANARY_PHONE); see _shared/canary.ts. */
+  canary?: CanaryPassConfig;
+  /** Function environment; read for OPS_ALERT_PHONE. Unset means no ops alerts (skipped, and logged). */
+  env?: (k: string) => string | undefined;
 };
 
 const TEMPLATE_LANGUAGE = "en";
@@ -122,10 +131,19 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const enquiry = parsed.value;
     log.add("enquiry_validated");
 
-    // 2. Spam check.
-    if (!(await deps.verifyTurnstile(enquiry.turnstileToken))) {
+    // 2. Spam check. The hourly canary sends canary:<CANARY_SECRET> instead of a
+    // Turnstile token; that passes only for the canary org's form (_shared/canary.ts).
+    let canary: CanaryVerdict = { kind: "not_canary" };
+    if (isCanaryToken(enquiry.turnstileToken, deps.canary?.secret)) {
+      const src = await findSource(db, enquiry.sourceKey).catch(() => null);
+      canary = canaryVerdict(deps.canary, enquiry.turnstileToken, src, enquiry.phone);
+    }
+    const spamOk = canary.kind === "not_canary"
+      ? await deps.verifyTurnstile(enquiry.turnstileToken)
+      : canary.kind === "allowed";
+    if (!spamOk) {
       orgId = (await findSource(db, enquiry.sourceKey).catch(() => null))?.org_id ?? null;
-      log.add("turnstile_failed");
+      log.add("turnstile_failed", canary.kind === "refused" ? { reason: canary.reason } : {});
       return withRequestId(json(403, { error: "Spam check failed. Please try again." }), requestId);
     }
     log.add("turnstile_passed");
@@ -144,7 +162,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const nowIso = now().toISOString();
     const existing = must(
       await db.from("leads")
-        .select("id, last_enquiry_at, details")
+        .select("id, last_enquiry_at, details, opted_out_at")
         .eq("org_id", orgId)
         .eq("phone_e164", enquiry.phone)
         .maybeSingle(),
@@ -181,12 +199,22 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // (a concurrent submit of the same form), otherwise it's a duplicate.
       // New custom answers replace old ones key by key; unanswered keys are kept.
       // The last_enquiry_at guard below also guards this read-merge-write.
+      //
+      // A lead who opted out (STOP) and now submits the form again with the
+      // consent box ticked has opted back in: this is the only thing that
+      // clears opted_out_at (spec 004, "Defaults picked"). A duplicate within
+      // 24h returned above and does not. The opted_out_at guard stops this
+      // update from wiping a STOP recorded after we read the lead; that case
+      // falls through to duplicate() and sends nothing.
       const details = { ...(existing.details as Record<string, Json>), ...enquiry.details };
+      const update = db.from("leads")
+        .update({ ...fields, details, opted_out_at: null })
+        .eq("id", existing.id)
+        .eq("last_enquiry_at", existing.last_enquiry_at);
       const updated = must(
-        await db.from("leads")
-          .update({ ...fields, details })
-          .eq("id", existing.id)
-          .eq("last_enquiry_at", existing.last_enquiry_at)
+        await (existing.opted_out_at
+          ? update.eq("opted_out_at", existing.opted_out_at)
+          : update.is("opted_out_at", null))
           .select("id")
           .maybeSingle(),
         "update lead",
@@ -194,6 +222,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       if (!updated) return await duplicate(existing);
       leadId = updated.id;
       log.add("lead_updated");
+      if (existing.opted_out_at) log.add("lead_opted_in", { previous_opted_out_at: existing.opted_out_at });
     } else {
       const inserted = await db.from("leads")
         .insert({ org_id: orgId, phone_e164: enquiry.phone, ...fields, details: enquiry.details })
@@ -267,6 +296,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       }
     }));
 
+    // 7. Follow-ups on day 1, 3 and 7 (spec 004, B.1). A repeat enquiry after
+    //    24h replaces the lead's queued set. Whether each one is still wanted
+    //    (reply, opt-out, consent) is decided when it runs.
+    await scheduleFollowUpsLogged(deps, log, savedLeadId, new Date(nowIso));
+
     log.add("enquiry_completed", {
       ack_sent: ack.ok,
       duration_ms: now().getTime() - startedAt.getTime(),
@@ -274,6 +308,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     return withRequestId(json(200, { lead_id: savedLeadId, duplicate: false, ack_sent: ack.ok }), requestId);
   } catch (err) {
     log.add("internal_error", { error: errorMessage(err) });
+    await captureException(err, { fn: "ingest-form", request_id: requestId, org_id: orgId });
     return withRequestId(json(500, { error: "Something went wrong. Please try again." }), requestId);
   } finally {
     await log.flush(orgId, leadId);
@@ -283,13 +318,13 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 type SourceWithOrg = {
   id: string;
   org_id: string;
-  org: { name: string; owner_alert_phones: string[] };
+  org: { name: string; owner_alert_phones: string[]; is_canary: boolean };
 };
 
 async function findSource(db: Deps["db"], publicKey: string): Promise<SourceWithOrg | null> {
   const row = must(
     await db.from("sources")
-      .select("id, org_id, org:orgs!inner(name, owner_alert_phones)")
+      .select("id, org_id, org:orgs!inner(name, owner_alert_phones, is_canary)")
       .eq("public_key", publicKey)
       .maybeSingle(),
     "find source",
@@ -403,6 +438,28 @@ async function enqueueRetry(
   }
 }
 
+/**
+ * Enqueues the enquiry's follow-ups. Never throws: the lead is saved and
+ * acknowledged either way. A failure is logged and ops are alerted (ops_alert
+ * params: "followups_schedule", the lead id, 1, the error), since otherwise
+ * this lead would silently get no follow-ups.
+ */
+async function scheduleFollowUpsLogged(deps: Deps, log: EventLog, leadId: string, enquiryAt: Date): Promise<void> {
+  try {
+    const { enqueued, cancelled } = await scheduleFollowUps(deps.db, leadId, enquiryAt, deps.now());
+    log.add("followups_scheduled", { job_ids: enqueued, cancelled_job_ids: cancelled });
+  } catch (err) {
+    const error = errorMessage(err);
+    log.add("followups_schedule_failed", { error });
+    const alert = await sendOpsAlert(
+      deps.provider,
+      deps.env ?? (() => undefined),
+      opsAlertParams({ kind: "followups_schedule", id: leadId, attempts: 1 }, error),
+    );
+    log.add(alert.type, alert.payload);
+  }
+}
+
 /** Cloudflare Turnstile check. Skipped (passes) when TURNSTILE_SECRET is unset. */
 export function makeVerifyTurnstile(
   env: (k: string) => string | undefined,
@@ -445,6 +502,8 @@ if (import.meta.main) {
     provider: getWhatsAppProvider(env),
     now: () => new Date(),
     verifyTurnstile: makeVerifyTurnstile(env),
+    canary: { secret: env("CANARY_SECRET"), phone: env("CANARY_PHONE"), provider: env("WHATSAPP_PROVIDER") },
+    env,
   };
   Deno.serve((req) => handler(req, deps));
 }
