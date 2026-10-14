@@ -2,7 +2,7 @@
 -- org for the week that just ended, keyed weekly:<org>:<iso-week>, and
 -- running it again for the same week queues nothing.
 begin;
-select plan(14);
+select plan(16);
 
 select is(
   (select schedule from cron.job where jobname = 'weekly-report'),
@@ -58,9 +58,21 @@ select isnt_empty(
   $$ select * from private.enqueue_weekly_reports('2026-10-19T03:30:00Z', 'eeeeeeee-0000-4000-8000-000000000001') $$,
   'the next Monday queues the next week');
 
+-- The canary org (spec 004, E.2) posts fake enquiries every hour: no report for it.
+update public.orgs set is_canary = false where is_canary;
+insert into public.orgs (id, name, slug, owner_alert_phones, is_canary)
+values ('eeeeeeee-0000-4000-8000-000000000003', 'Weekly Canary', 'weekly-canary', array['+919700000103'], true);
+select is_empty(
+  $$ select * from private.enqueue_weekly_reports('2026-10-12T03:30:00Z', 'eeeeeeee-0000-4000-8000-000000000003') $$,
+  'the canary org gets no weekly report, even when named');
+
 select isnt_empty(
   $$ select * from private.enqueue_weekly_reports('2026-10-12T03:30:00Z') $$,
   'without an org it queues every org (the seeded demo org here)');
+select is(
+  (select count(*)::int from public.jobs
+    where org_id = 'eeeeeeee-0000-4000-8000-000000000003' and kind = 'weekly_report'),
+  0, 'and still none for the canary org');
 
 -- weekly_report_data: what the job sends, for the service role only.
 insert into auth.users (id, aud, role, email)

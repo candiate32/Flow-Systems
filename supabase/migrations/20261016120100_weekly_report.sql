@@ -24,8 +24,9 @@ revoke execute on function private.report_week_start(timestamptz) from public, a
 
 -- Queues the weekly_report job of every org (or only p_org_id), due at
 -- p_as_of, with payload { week_start: 'YYYY-MM-DD', iso_week: 'IYYY-Www' }.
--- An org whose job for that week exists already is skipped. Returns the ids
--- of the jobs it queued.
+-- An org whose job for that week exists already is skipped, and so is the
+-- canary org (orgs.is_canary, spec 004 E.2): its leads are fake. Returns the
+-- ids of the jobs it queued.
 create function private.enqueue_weekly_reports(p_as_of timestamptz default now(), p_org_id uuid default null)
 returns setof uuid
 language sql
@@ -43,7 +44,8 @@ as $$
          jsonb_build_object('week_start', n.week_start, 'iso_week', n.iso_week)
     from public.orgs o
    cross join named n
-   where p_org_id is null or o.id = p_org_id
+   where not o.is_canary
+     and (p_org_id is null or o.id = p_org_id)
    order by o.id
   on conflict (idempotency_key) do nothing
   returning id;
