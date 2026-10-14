@@ -1,12 +1,19 @@
-/** Templates the engine sends. `ops_alert` goes to Flow Systems ops, not to a studio's leads. */
+/**
+ * Templates the engine sends. `owner_alert` and `weekly_summary` go to a
+ * studio's owner phones and `ops_alert` to Flow Systems ops, not to leads.
+ */
 export const TEMPLATE_NAMES = [
   "enquiry_ack",
   "followup_1",
   "followup_2",
   "followup_3",
   "owner_alert",
+  "weekly_summary",
   "ops_alert",
 ] as const;
+
+/** Templates that go to one of the org's owner_alert_phones rather than to a lead. */
+export const OWNER_TEMPLATES: readonly TemplateName[] = ["owner_alert", "weekly_summary"];
 export type TemplateName = typeof TEMPLATE_NAMES[number];
 
 export type TemplateMessage = {

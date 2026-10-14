@@ -287,26 +287,27 @@ dbTest("a running job whose lease expired is claimed again; past max_attempts it
   }
 });
 
-dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE means a skipped-alert event", async () => {
+// Every kind the jobs table allows (its CHECK constraint) has a handler now, so
+// an unknown kind can't be inserted. The runner's guard is still checked by
+// running a real job with its kind's handler removed.
+dbTest("a job whose kind has no handler dead-letters at once, visibly; no OPS_ALERT_PHONE means a skipped-alert event", async () => {
   await purgeTestJobs();
   const ids: string[] = [];
   try {
-    for (const kind of ["weekly_report"]) {
-      ids.push((await enqueueJob(db, {
-        org_id: DEMO_ORG,
-        kind,
-        run_at: T0.toISOString(),
-        idempotency_key: `test:${crypto.randomUUID()}`,
-      }))!);
-    }
+    ids.push((await enqueueJob(db, {
+      org_id: DEMO_ORG,
+      kind: "weekly_report",
+      run_at: T0.toISOString(),
+      idempotency_key: `test:${crypto.randomUUID()}`,
+    }))!);
     const provider = new FakeWhatsAppProvider();
-    const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
+    const summary = await runClaimedJobs({ ...runnerDeps(provider, { t: T0 }), handlers: { weekly_report: undefined } });
     assertEquals(summary.dead, 1);
     for (const id of ids) {
       const job = await jobRow(id);
       assertEquals(job.status, "dead");
       assertEquals(job.attempts, 1);
-      assert(job.last_error!.includes("not implemented in slice A"), job.last_error!);
+      assertEquals(job.last_error, 'no handler for job kind "weekly_report"');
       const events = await eventsForJob(id);
       assertEquals(events.map((e) => e.type), ["job_dead", "ops_alert_skipped"]);
       assertEquals((events[1].payload as { reason: string }).reason, "OPS_ALERT_PHONE is not set");
