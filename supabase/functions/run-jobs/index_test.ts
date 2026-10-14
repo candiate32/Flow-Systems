@@ -95,7 +95,7 @@ Deno.test("run-jobs: 200 and a summary with the right secret", async () => {
     env: envOf({ RUN_JOBS_SECRET: "s3cret" }),
   });
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
+  assertEquals(await res.json(), { claimed: 0, done: 0, cancelled: 0, deferred: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
 });
 
 Deno.test("secretMatches needs both values and an exact match", () => {
@@ -150,7 +150,7 @@ dbTest("send_message: sends once, records the message with its job, sets first_a
     const clock = { t: T0 };
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs(runnerDeps(provider, clock));
-    assertEquals(summary, { claimed: 1, done: 1, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
+    assertEquals(summary, { claimed: 1, done: 1, cancelled: 0, deferred: 0, retried: 0, dead: 0, lost: 0, errors: 0 });
 
     assertEquals(provider.sent.length, 1);
     assertEquals(provider.sent[0].to, phone.e164);
@@ -274,7 +274,7 @@ dbTest("a running job whose lease expired is claimed again; past max_attempts it
     assertEquals((await runClaimedJobs(runnerDeps(provider, { t: new Date(T0.getTime() + 10 * MIN) }))).claimed, 0);
     // 15 minutes later both leases have expired.
     const summary = await runClaimedJobs(runnerDeps(provider, { t: new Date(T0.getTime() + 15 * MIN) }));
-    assertEquals(summary, { claimed: 2, done: 1, cancelled: 0, retried: 0, dead: 1, lost: 0, errors: 0 });
+    assertEquals(summary, { claimed: 2, done: 1, cancelled: 0, deferred: 0, retried: 0, dead: 1, lost: 0, errors: 0 });
     assertEquals(provider.sent.length, 1, "only the job with attempts left is run");
     assertEquals((await jobRow(retryable)).attempts, 2);
     const dead = await jobRow(exhausted);
@@ -291,7 +291,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
   await purgeTestJobs();
   const ids: string[] = [];
   try {
-    for (const kind of ["followup", "weekly_report"]) {
+    for (const kind of ["weekly_report"]) {
       ids.push((await enqueueJob(db, {
         org_id: DEMO_ORG,
         kind,
@@ -301,7 +301,7 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
     }
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
-    assertEquals(summary.dead, 2);
+    assertEquals(summary.dead, 1);
     for (const id of ids) {
       const job = await jobRow(id);
       assertEquals(job.status, "dead");
@@ -314,6 +314,25 @@ dbTest("kinds not built yet dead-letter at once, visibly; no OPS_ALERT_PHONE mea
     assertEquals(provider.sent.length, 0);
   } finally {
     await cleanup({ jobIds: ids });
+  }
+});
+
+dbTest("a send_message job to a lead who opted out is cancelled, not sent (spec 004, B.4)", async () => {
+  await purgeTestJobs();
+  const phone = uniquePhone();
+  const leadId = await insertLead(phone.e164);
+  try {
+    const jobId = await enqueueAck(leadId, phone.e164);
+    await db.from("leads").update({ opted_out_at: T0.toISOString() }).eq("id", leadId);
+    const provider = new FakeWhatsAppProvider();
+    const summary = await runClaimedJobs(runnerDeps(provider, { t: T0 }));
+    assertEquals(summary.cancelled, 1);
+    assertEquals(provider.sent.length, 0);
+    assertEquals((await jobRow(jobId)).status, "cancelled");
+    const events = await eventsForJob(jobId);
+    assertEquals(events.map((e) => [e.type, (e.payload as { reason?: string }).reason]), [["job_cancelled", "lead opted out"]]);
+  } finally {
+    await cleanup({ leadIds: [leadId] });
   }
 });
 
@@ -456,7 +475,7 @@ dbTest("lost lease on a retry: no retry event, and the other runner's state is k
     const jobId = await enqueueAck(leadId, phone.e164);
     const provider = new FakeWhatsAppProvider();
     const summary = await runClaimedJobs({ ...runnerDeps(provider, { t: T0 }), handlers: losesLeaseThenThrows() });
-    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
+    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, deferred: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
     const job = await jobRow(jobId);
     assertEquals(job.status, "running", "still the other runner's");
     assertEquals(job.attempts, 2);
@@ -478,7 +497,7 @@ dbTest("lost lease on the final attempt: no job_dead event and no ops alert", as
       ...runnerDeps(provider, { t: T0 }, { OPS_ALERT_PHONE: "+919000000002" }),
       handlers: losesLeaseThenThrows(),
     });
-    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
+    assertEquals(summary, { claimed: 1, done: 0, cancelled: 0, deferred: 0, retried: 0, dead: 0, lost: 1, errors: 0 });
     assertEquals(provider.sent.length, 0, "no ops alert");
     const job = await jobRow(jobId);
     assertEquals(job.status, "running");

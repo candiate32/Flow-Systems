@@ -14,7 +14,7 @@ select columns_are('public', 'sources', array['id', 'org_id', 'kind', 'name', 'p
 select columns_are('public', 'leads',
   array['id', 'org_id', 'source_id', 'name', 'phone_e164', 'bhk', 'possession_month', 'consent_at',
         'status', 'last_enquiry_at', 'first_auto_reply_at', 'first_human_reply_at', 'last_inbound_at', 'created_at',
-        'details']);
+        'details', 'opted_out_at']);
 select columns_are('public', 'messages',
   array['id', 'org_id', 'lead_id', 'to_phone', 'direction', 'kind', 'template_name', 'body', 'provider',
         'provider_message_id', 'status', 'error', 'created_at', 'sent_at', 'job_id']);

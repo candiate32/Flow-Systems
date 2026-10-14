@@ -514,6 +514,9 @@ dbTest(
           if (msg.template === "ops_alert") return provider.sendTemplate(msg as never);
           return Promise.reject(new Error("provider down"));
         },
+        sendSession() {
+          return Promise.reject(new Error("provider down"));
+        },
       };
       const downIngest = (url: string, init: RequestInit) =>
         ingest(new Request(url, init), {

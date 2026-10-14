@@ -4,6 +4,8 @@
 // the right secret gets 401.
 //
 // A handler that throws re-queues its job with backoff (1, 5, 25, 120 minutes).
+// A handler that defers (a follow-up in quiet hours) re-queues it for the time
+// it names and gives back the attempt its claim used.
 // After max_attempts, or at once for a PermanentJobError, the job is `dead`:
 // a `job_dead` event is written and ops get an `ops_alert` WhatsApp template.
 // Full specifier on purpose, as in ingest-form.
@@ -14,7 +16,7 @@ import { errorMessage, must } from "../_shared/db.ts";
 import { json } from "../_shared/http.ts";
 import { type Job, type JobKind, nextRunAt, opsAlertParams, PermanentJobError } from "../_shared/jobs.ts";
 import { captureException } from "../_shared/monitoring.ts";
-import { normalizeIndianMobile } from "../_shared/phone.ts";
+import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import { getWhatsAppProvider, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { defaultHandlers, type JobContext, type JobHandler, type JobOutcome } from "./handlers.ts";
 
@@ -42,6 +44,8 @@ export type RunSummary = {
   claimed: number;
   done: number;
   cancelled: number;
+  /** Jobs their handler put back in the queue for later (follow-ups in quiet hours). */
+  deferred: number;
   retried: number;
   dead: number;
   /** Jobs another runner took over (lease expired) before this one could settle them. */
@@ -50,7 +54,7 @@ export type RunSummary = {
   errors: number;
 };
 
-type Outcome = "done" | "cancelled" | "retried" | "dead" | "lost";
+type Outcome = "done" | "cancelled" | "deferred" | "retried" | "dead" | "lost";
 
 const DEFAULT_BATCH = 10;
 // pg_net waits 55 s; cron fires every 60 s. Overlapping runs are safe anyway
@@ -63,7 +67,16 @@ export async function runClaimedJobs(deps: Deps, opts: RunOptions = {}): Promise
   const budget = opts.timeBudgetMs ?? DEFAULT_BUDGET_MS;
   const handlers: Partial<Record<string, JobHandler>> = { ...defaultHandlers, ...deps.handlers };
   const started = performance.now();
-  const summary: RunSummary = { claimed: 0, done: 0, cancelled: 0, retried: 0, dead: 0, lost: 0, errors: 0 };
+  const summary: RunSummary = {
+    claimed: 0,
+    done: 0,
+    cancelled: 0,
+    deferred: 0,
+    retried: 0,
+    dead: 0,
+    lost: 0,
+    errors: 0,
+  };
 
   while (performance.now() - started < budget) {
     const jobs = must(
@@ -105,6 +118,14 @@ async function runOne(job: Job, handlers: Partial<Record<string, JobHandler>>, d
     if (!(await settle(job, deps, { status: "queued", run_at: runAt, last_error: error }))) return "lost";
     await addEvent(deps, job, "job_retry_scheduled", { attempt: job.attempts, error, run_at: runAt });
     return "retried";
+  }
+
+  if (outcome.status === "deferred") {
+    // Not a failure: give back the attempt the claim counted.
+    const runAt = outcome.runAt.toISOString();
+    if (!(await settle(job, deps, { status: "queued", run_at: runAt, attempts: job.attempts - 1 }))) return "lost";
+    await addEvent(deps, job, "job_deferred", { reason: outcome.reason, run_at: runAt });
+    return "deferred";
   }
 
   if (!(await settle(job, deps, { status: outcome.status }))) return "lost";
@@ -162,25 +183,8 @@ async function deadLetter(job: Job, deps: Deps, error: string): Promise<"dead" |
  * died, and the alert must not keep the job from being dead-lettered).
  */
 async function alertOps(job: Job, deps: Deps, error: string): Promise<void> {
-  const raw = deps.env("OPS_ALERT_PHONE");
-  const to = raw ? normalizeIndianMobile(raw) : null;
-  if (!to) {
-    await addEvent(deps, job, "ops_alert_skipped", {
-      reason: raw ? "OPS_ALERT_PHONE is not a valid mobile number" : "OPS_ALERT_PHONE is not set",
-    });
-    return;
-  }
-  try {
-    const { providerMessageId } = await deps.provider.sendTemplate({
-      to,
-      template: "ops_alert",
-      language: "en",
-      params: opsAlertParams(job, error),
-    });
-    await addEvent(deps, job, "ops_alert_sent", { provider_message_id: providerMessageId });
-  } catch (err) {
-    await addEvent(deps, job, "ops_alert_failed", { error: errorMessage(err) });
-  }
+  const event = await sendOpsAlert(deps.provider, deps.env, opsAlertParams(job, error));
+  await addEvent(deps, job, event.type, event.payload);
 }
 
 /** Writes an event for the job's org and lead. Logs instead of throwing. */

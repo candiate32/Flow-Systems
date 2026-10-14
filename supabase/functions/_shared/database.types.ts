@@ -3,25 +3,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type Database = {
   
-  "graphql_public": {
-          Tables: {
-            [_ in never]: never
-          }
-          Views: {
-            [_ in never]: never
-          }
-          Functions: {
-            "graphql":
-{ Args: { "extensions"?: Json,"operationName"?: string,"query"?: string,"variables"?: Json }; Returns: Json
-                           }
-          }
-          Enums: {
-            [_ in never]: never
-          }
-          CompositeTypes: {
-            [_ in never]: never
-          }
-        },"public": {
+  "public": {
           Tables: {
             "audit_log": {
                   Row: {
@@ -97,14 +79,14 @@ isOneToOne: false
                   ]
                 },"leads": {
                   Row: {
-                    "bhk": string | null,"consent_at": string,"created_at": string,"details": NonNullable<Json>,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_inbound_at": string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
+                    "bhk": string | null,"consent_at": string,"created_at": string,"details": NonNullable<Json>,"first_auto_reply_at": string | null,"first_human_reply_at": string | null,"id": string,"last_enquiry_at": string,"last_inbound_at": string | null,"name": string,"opted_out_at": string | null,"org_id": string,"phone_e164": string,"possession_month": string | null,"source_id": string | null,"status": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name": string,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at": string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name": string,"opted_out_at"?: string | null,"org_id": string,"phone_e164": string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Update: {
-                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name"?: string,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
+                    "bhk"?: string | null,"consent_at"?: string,"created_at"?: string,"details"?: NonNullable<Json>,"first_auto_reply_at"?: string | null,"first_human_reply_at"?: string | null,"id"?: string,"last_enquiry_at"?: string,"last_inbound_at"?: string | null,"name"?: string,"opted_out_at"?: string | null,"org_id"?: string,"phone_e164"?: string,"possession_month"?: string | null,"source_id"?: string | null,"status"?: string
                   }
                   Relationships: [
                     {
@@ -247,7 +229,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "claim_jobs":
+            "cancel_followups":
+{ Args: { "p_as_of"?: string,"p_lead_id": string,"p_reason": string }; Returns: string[]
+                           },
+"claim_jobs":
 { Args: { "as_of"?: string,"batch": number }; Returns: {
               "attempts": number,
 "created_at": string,
@@ -268,9 +253,15 @@ isOneToOne: false
         to: "jobs"
         isOneToOne: false
         isSetofReturn: true
-      } }
-            "delete_lead":
+      } },
+"delete_lead":
 { Args: { "lead": string }; Returns: boolean
+                           },
+"record_opt_out":
+{ Args: { "p_at"?: string,"p_lead_id": string }; Returns: (string)[]
+                           },
+"schedule_followups":
+{ Args: { "p_as_of"?: string,"p_jobs": Json,"p_lead_id": string,"p_reason": string }; Returns: Json
                            }
           }
           Enums: {
@@ -388,11 +379,7 @@ export type CompositeTypes<
   : never
 
 export const Constants = {
-  "graphql_public": {
-          Enums: {
-            
-          }
-        },"public": {
+  "public": {
           Enums: {
             
           }

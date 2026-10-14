@@ -6,7 +6,7 @@
 // deno-lint-ignore no-import-prefix -- see index.ts
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Database } from "../_shared/database.types.ts";
-import type { TemplateMessage, WhatsAppProvider } from "../_shared/whatsapp.ts";
+import type { SessionMessage, TemplateMessage, WhatsAppProvider } from "../_shared/whatsapp.ts";
 import type { Deps } from "./index.ts";
 
 export const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -38,21 +38,38 @@ export function uniquePhone(): { national: string; e164: string } {
 }
 
 export type Call = TemplateMessage & { at: Date; ok: boolean; providerMessageId?: string };
+export type SessionCall = SessionMessage & { at: Date; ok: boolean; providerMessageId?: string };
 
-/** Fails the first `failFirst` calls, then succeeds. Records every call with the clock's time. */
+/**
+ * Fails the first `failFirst` calls (templates and session messages counted
+ * together), then succeeds. Records every call with the clock's time.
+ */
 export class FlakyProvider implements WhatsAppProvider {
   readonly name = "fake";
   readonly calls: Call[] = [];
+  readonly sessionCalls: SessionCall[] = [];
   /** Marks error texts so a test can find the rows it created. */
   readonly marker = `flaky-${crypto.randomUUID()}`;
+  private n = 0;
 
   constructor(private failFirst: number, private clock: () => Date) {}
 
   sendTemplate(msg: TemplateMessage): Promise<{ providerMessageId: string }> {
     const call: Call = { ...msg, params: [...msg.params], at: this.clock(), ok: false };
     this.calls.push(call);
-    if (this.calls.length <= this.failFirst) {
-      return Promise.reject(new Error(`provider down (${this.marker}, call ${this.calls.length})`));
+    return this.answer(call);
+  }
+
+  sendSession(msg: SessionMessage): Promise<{ providerMessageId: string }> {
+    const call: SessionCall = { to: msg.to, text: msg.text, at: this.clock(), ok: false };
+    this.sessionCalls.push(call);
+    return this.answer(call);
+  }
+
+  private answer(call: { ok: boolean; providerMessageId?: string }): Promise<{ providerMessageId: string }> {
+    this.n++;
+    if (this.n <= this.failFirst) {
+      return Promise.reject(new Error(`provider down (${this.marker}, call ${this.n})`));
     }
     call.ok = true;
     call.providerMessageId = `fake-${crypto.randomUUID()}`;
