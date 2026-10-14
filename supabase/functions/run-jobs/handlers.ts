@@ -8,6 +8,7 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must, mustRow } from "../_shared/db.ts";
 import { type Job, type JobKind, parseSendMessagePayload, PermanentJobError } from "../_shared/jobs.ts";
 import { OWNER_TEMPLATES, type WhatsAppProvider } from "../_shared/whatsapp.ts";
+import { canary } from "./canary.ts";
 import { followUp } from "./followup.ts";
 import { weeklyReport } from "./weekly_report.ts";
 
@@ -24,6 +25,8 @@ export type JobContext = {
   /** For HTTP calls other than the WhatsApp provider (Resend). Tests inject a fake. */
   fetch: typeof fetch;
   addEvent: (job: Job, type: string, payload?: Record<string, Json>) => Promise<void>;
+  /** Sends the ops_alert template to OPS_ALERT_PHONE. Never throws. */
+  alertOps: (job: Job, error: string) => Promise<void>;
 };
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<JobOutcome | void>;
@@ -150,14 +153,9 @@ async function checkOwnerPhone(job: Job, to: string, db: JobContext["db"]): Prom
   return null;
 }
 
-/** Kinds that later slices implement. Such jobs dead-letter visibly until then. */
-const notYet = (kind: JobKind): JobHandler => () => {
-  throw new PermanentJobError(`${kind} is not implemented in slice A`);
-};
-
 export const defaultHandlers: Record<JobKind, JobHandler> = {
   send_message: sendMessage,
   followup: followUp,
   weekly_report: weeklyReport,
-  canary: notYet("canary"),
+  canary,
 };

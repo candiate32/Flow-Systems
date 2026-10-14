@@ -18,6 +18,11 @@ export function turnstileSiteKey(): string {
   return read('VITE_TURNSTILE_SITE_KEY')
 }
 
+/** Flow Systems' own WhatsApp number for the home page's audit button; empty until there is one. */
+export function contactWhatsappNumber(): string {
+  return read('VITE_CONTACT_WHATSAPP')
+}
+
 // Static hosts without SPA rewrites (GitHub Pages previews) use hash routes: /#/admin.
 export function hashRouting(): boolean {
   return read('VITE_HASH_ROUTER') === 'true'

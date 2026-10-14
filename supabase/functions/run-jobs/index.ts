@@ -15,6 +15,7 @@ import type { Database, Json } from "../_shared/database.types.ts";
 import { errorMessage, must } from "../_shared/db.ts";
 import { json } from "../_shared/http.ts";
 import { type Job, type JobKind, nextRunAt, opsAlertParams, PermanentJobError } from "../_shared/jobs.ts";
+import { captureException } from "../_shared/monitoring.ts";
 import { sendOpsAlert } from "../_shared/ops_alert.ts";
 import { getWhatsAppProvider, type WhatsAppProvider } from "../_shared/whatsapp.ts";
 import { defaultHandlers, type JobContext, type JobHandler, type JobOutcome } from "./handlers.ts";
@@ -87,8 +88,9 @@ export async function runClaimedJobs(deps: Deps, opts: RunOptions = {}): Promise
     if (!jobs.length) break;
     summary.claimed += jobs.length;
     const outcomes = await Promise.all(jobs.map((job) =>
-      runOne(job, handlers, deps).catch((err) => {
+      runOne(job, handlers, deps).catch(async (err) => {
         log({ job_id: job.id, kind: job.kind, outcome_not_recorded: errorMessage(err) });
+        await captureException(err, { fn: "run-jobs", job_id: job.id, kind: job.kind, outcome_not_recorded: true });
         return "error" as const;
       })
     ));
@@ -143,6 +145,7 @@ function contextFor(deps: Deps): JobContext {
     env: deps.env,
     fetch: deps.fetch ?? globalThis.fetch,
     addEvent: (job, type, payload) => addEvent(deps, job, type, payload),
+    alertOps: (job, error) => alertOps(job, deps, error),
   };
 }
 
@@ -174,6 +177,7 @@ async function settle(
 async function deadLetter(job: Job, deps: Deps, error: string): Promise<"dead" | "lost"> {
   if (!(await settle(job, deps, { status: "dead", last_error: error }))) return "lost";
   await addEvent(deps, job, "job_dead", { attempts: job.attempts, max_attempts: job.max_attempts, error });
+  await captureException(new Error(`job dead: ${error}`), { fn: "run-jobs", job_id: job.id, kind: job.kind });
   await alertOps(job, deps, error);
   return "dead";
 }
@@ -229,6 +233,7 @@ export async function handler(req: Request, deps: Deps, opts?: RunOptions): Prom
     return json(200, await runClaimedJobs(deps, opts));
   } catch (err) {
     log({ run_failed: errorMessage(err) });
+    await captureException(err, { fn: "run-jobs", run_failed: true });
     return json(500, { error: "run failed" });
   }
 }

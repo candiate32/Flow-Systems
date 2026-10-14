@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams, type To } from 'react-router'
-import { FormRenderer } from '../forms/components/FormRenderer'
+import { FormStack } from '../forms/components/FormStack'
+import { Swatch } from '../forms/components/Swatch'
 import { FORM_CONFIGS, getFormConfig, HOME_FORM_SLUG } from '../forms/configs'
-import { resolveTheme, SHARED_TYPE } from '../forms/themes'
-import type { FormConfig } from '../forms/types'
+import { SHARED_TYPE } from '../forms/themes'
+import { BrandMark } from '../home/BrandMark'
 
 /** The default form keeps a clean `/`; the others are `/?form=<slug>`, so every view can be shared. */
 function showcaseLink(slug: string): To {
@@ -11,16 +12,6 @@ function showcaseLink(slug: string): To {
 }
 
 const barFocus = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white'
-
-function Swatch({ config }: { config: FormConfig }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="size-2.5 shrink-0 rounded-full ring-1 ring-white/30"
-      style={{ backgroundColor: resolveTheme(config.theme).accent }}
-    />
-  )
-}
 
 function ArrowLink({ to, label, direction }: { to: To; label: string; direction: 'prev' | 'next' }) {
   return (
@@ -42,10 +33,7 @@ function ArrowLink({ to, label, direction }: { to: To; label: string; direction:
   )
 }
 
-/**
- * Arrow keys switch forms only from outside the form itself: a switch from any
- * field, chip or button in it would throw away what the person has typed.
- */
+/** Arrow keys switch forms only from outside the form, so they never fight a field, chip or button. */
 function isInForm(target: EventTarget | null): boolean {
   return target instanceof Element && !!target.closest('form, input, select, textarea, [contenteditable]')
 }
@@ -57,9 +45,23 @@ function isInForm(target: EventTarget | null): boolean {
 export default function Showcase() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
-  const config = getFormConfig(params.get('form') ?? '') ?? getFormConfig(HOME_FORM_SLUG) ?? FORM_CONFIGS[0]
+  const urlSlug = (getFormConfig(params.get('form') ?? '') ?? getFormConfig(HOME_FORM_SLUG) ?? FORM_CONFIGS[0]).slug
+
+  // The shown form is state, so key presses compose (setActive(fn)) at any
+  // speed; the URL follows it, and a link or edited URL leads it.
+  const [active, setActive] = useState(urlSlug)
+  const [lastUrlSlug, setLastUrlSlug] = useState(urlSlug)
+  if (urlSlug !== lastUrlSlug) {
+    setLastUrlSlug(urlSlug)
+    setActive(urlSlug)
+  }
+  useEffect(() => {
+    if (active !== urlSlug) navigate(showcaseLink(active), { replace: true })
+  }, [active, urlSlug, navigate])
+
   const count = FORM_CONFIGS.length
-  const index = FORM_CONFIGS.indexOf(config)
+  const index = FORM_CONFIGS.findIndex((c) => c.slug === active)
+  const config = FORM_CONFIGS[index]
   const prev = FORM_CONFIGS[(index - 1 + count) % count]
   const next = FORM_CONFIGS[(index + 1) % count]
 
@@ -67,20 +69,18 @@ export default function Showcase() {
     document.title = `${config.studio.name} · Sample forms by Flow Systems`
   }, [config])
 
-  // A switch made while scrolled down starts the new form from its top.
-  const shownSlug = useRef(config.slug)
+  // Arriving from another page, such as the bottom of /home, starts at the top.
   useEffect(() => {
-    if (shownSlug.current === config.slug) return
-    shownSlug.current = config.slug
     if (window.scrollY > 0) window.scrollTo({ top: 0 })
-  }, [config.slug])
+  }, [])
 
-  // The key handler steps from this rather than from the render it was made in,
-  // so quick presses land on the right form before React re-renders.
-  const shownIndex = useRef(index)
+  // A switch made while scrolled down starts the new form from its top.
+  const shownSlug = useRef(active)
   useEffect(() => {
-    shownIndex.current = index
-  }, [index])
+    if (shownSlug.current === active) return
+    shownSlug.current = active
+    if (window.scrollY > 0) window.scrollTo({ top: 0 })
+  }, [active])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -88,32 +88,45 @@ export default function Showcase() {
       if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       if (isInForm(e.target)) return
       e.preventDefault()
-      const to = (shownIndex.current + (e.key === 'ArrowLeft' ? -1 : 1) + count) % count
-      shownIndex.current = to
-      navigate(showcaseLink(FORM_CONFIGS[to].slug), { replace: true })
+      const step = e.key === 'ArrowLeft' ? -1 : 1
+      setActive((slug) => {
+        const i = FORM_CONFIGS.findIndex((c) => c.slug === slug)
+        return FORM_CONFIGS[(i + step + count) % count].slug
+      })
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [navigate, count])
+  }, [count])
 
   return (
     <div className="flex min-h-dvh flex-col bg-stone-950" style={{ fontFamily: SHARED_TYPE.fontBody }}>
       <header className="border-b border-white/10 text-stone-100">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2 sm:px-6 lg:gap-6 lg:px-8">
+        <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3 sm:px-6 lg:gap-6 lg:px-8">
+          <Link
+            to="/home"
+            aria-label="Flow Systems: what we do"
+            className={`-ml-2 flex size-11 shrink-0 items-center justify-center rounded-lg lg:hidden ${barFocus}`}
+          >
+            <BrandMark className="ring-1 ring-white/15" />
+          </Link>
           <div className="min-w-0 flex-1">
-            <p className="hidden lg:block">
+            <Link
+              to="/home"
+              className={`hidden min-h-11 flex-col justify-center rounded-md lg:inline-flex ${barFocus}`}
+              aria-label="Flow Systems: what we do"
+            >
               <span className="block text-[0.9375rem] font-bold tracking-[-0.01em]" style={{ fontFamily: SHARED_TYPE.fontDisplay }}>
                 Flow Systems
               </span>
               <span className="block text-xs text-stone-400">Sample enquiry forms, live on our lead engine</span>
+            </Link>
+            <p className="truncate text-[0.6875rem] leading-none font-semibold tracking-[0.14em] text-stone-400 uppercase lg:hidden">
+              Flow Systems
             </p>
-            <p className="text-[0.6875rem] leading-none font-semibold tracking-[0.16em] text-stone-400 uppercase lg:hidden">
-              Flow Systems · Sample forms
-            </p>
-            <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm font-semibold lg:hidden">
-              <Swatch config={config} />
+            <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-sm font-semibold lg:hidden">
+              <Swatch config={config} className="ring-1 ring-white/30" />
               <span className="truncate">{config.studio.name}</span>
-              <span className="shrink-0 font-normal text-stone-400 tabular-nums">
+              <span className="shrink-0 text-xs font-normal text-stone-400 tabular-nums">
                 {index + 1} of {count}
               </span>
             </p>
@@ -121,7 +134,7 @@ export default function Showcase() {
           <nav aria-label="Sample forms" className="hidden lg:block">
             <ul className="flex items-center gap-1">
               {FORM_CONFIGS.map((c) => {
-                const current = c.slug === config.slug
+                const current = c.slug === active
                 return (
                   <li key={c.slug}>
                     <Link
@@ -134,7 +147,7 @@ export default function Showcase() {
                         barFocus,
                       ].join(' ')}
                     >
-                      <Swatch config={c} />
+                      <Swatch config={c} className="ring-1 ring-white/30" />
                       {c.studio.name}
                     </Link>
                   </li>
@@ -151,10 +164,7 @@ export default function Showcase() {
           Showing {config.studio.name}, form {index + 1} of {count}
         </p>
       </header>
-      {/* Keyed so each switch starts the form empty and fades it in. */}
-      <div key={config.slug} className="flex flex-1 flex-col motion-safe:animate-[ff-enter_240ms_ease-out]">
-        <FormRenderer config={config} fullPage />
-      </div>
+      <FormStack configs={FORM_CONFIGS} active={active} fullPage />
     </div>
   )
 }

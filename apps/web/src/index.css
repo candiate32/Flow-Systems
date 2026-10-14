@@ -7,3 +7,35 @@
     transform: translateY(6px);
   }
 }
+
+/* Home page: hero beats play in once; the typing dots show between enquiry and reply. */
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+@keyframes typing-window {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  12%,
+  85% {
+    opacity: 1;
+  }
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
