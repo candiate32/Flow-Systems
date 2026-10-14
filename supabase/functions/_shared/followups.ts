@@ -89,6 +89,8 @@ export type FollowUpLead = {
   opted_out_at: string | null;
   last_inbound_at: string | null;
   first_human_reply_at: string | null;
+  /** The latest staff reply; first_human_reply_at is set once, so a repeat enquiry needs this one. */
+  last_human_reply_at: string | null;
 };
 
 export type FollowUpDecision =
@@ -112,7 +114,9 @@ export function decideFollowUp(lead: FollowUpLead, enquiryAt: Date, now: Date): 
   if (lead.opted_out_at) return { action: "cancel", reason: "lead opted out" };
   if (!lead.consent_at) return { action: "cancel", reason: "lead has not given consent" };
   if (after(lead.last_inbound_at)) return { action: "cancel", reason: "lead replied after the enquiry" };
-  if (after(lead.first_human_reply_at)) return { action: "cancel", reason: "staff replied after the enquiry" };
+  if (after(lead.last_human_reply_at) || after(lead.first_human_reply_at)) {
+    return { action: "cancel", reason: "staff replied after the enquiry" };
+  }
   if (isQuietHour(now)) return { action: "defer", runAt: outOfQuietHours(now) };
   const inside = isInsideServiceWindow(lead.last_inbound_at ? new Date(lead.last_inbound_at) : null, now);
   return { action: "send", mode: inside ? "session" : "template" };

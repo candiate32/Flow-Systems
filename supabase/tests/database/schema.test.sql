@@ -14,13 +14,14 @@ select columns_are('public', 'sources', array['id', 'org_id', 'kind', 'name', 'p
 select columns_are('public', 'leads',
   array['id', 'org_id', 'source_id', 'name', 'phone_e164', 'bhk', 'possession_month', 'consent_at',
         'status', 'last_enquiry_at', 'first_auto_reply_at', 'first_human_reply_at', 'last_inbound_at', 'created_at',
-        'details', 'opted_out_at']);
+        'details', 'opted_out_at', 'last_human_reply_at']);
 select columns_are('public', 'messages',
   array['id', 'org_id', 'lead_id', 'to_phone', 'direction', 'kind', 'template_name', 'body', 'provider',
         'provider_message_id', 'status', 'error', 'created_at', 'sent_at', 'job_id']);
 select columns_are('public', 'events', array['id', 'org_id', 'lead_id', 'type', 'payload', 'created_at']);
 select columns_are('public', 'webhook_events',
-  array['id', 'provider', 'provider_event_id', 'payload', 'received_at', 'processed_at']);
+  array['id', 'provider', 'provider_event_id', 'payload', 'received_at', 'processed_at',
+        'kind', 'org_id', 'lead_id', 'phone', 'attempts', 'processing_error', 'result']);
 
 select col_type_is('public', 'leads', 'consent_at', 'timestamp with time zone', 'col_type_is leads consent_at, timestamp with time zone');
 select col_not_null('public', 'leads', 'consent_at', 'col_not_null leads consent_at');

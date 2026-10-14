@@ -11,7 +11,11 @@ export type TemplateText = {
   params: readonly string[];
 };
 
-export const FOLLOW_UP_TEMPLATES = ["followup_1", "followup_2", "followup_3"] as const;
+export const FOLLOW_UP_TEMPLATES = [
+  "followup_1",
+  "followup_2",
+  "followup_3",
+] as const;
 export type FollowUpTemplate = typeof FOLLOW_UP_TEMPLATES[number];
 
 /** Follow-up n (1, 2 or 3) is sent as template `followup_<n>`. */
@@ -27,7 +31,8 @@ export const TEMPLATE_TEXTS: Record<FollowUpTemplate, TemplateText> = {
     params: ["first_name", "studio_name"],
   },
   followup_2: {
-    body: "Hi {{1}}, {{2}} here. We'd still love to help with your home interiors. " +
+    body:
+      "Hi {{1}}, {{2}} here. We'd still love to help with your home interiors. " +
       "Reply with a convenient time and our designer will call you. Reply STOP to opt out.",
     params: ["first_name", "studio_name"],
   },
@@ -44,10 +49,43 @@ export const TEMPLATE_TEXTS: Record<FollowUpTemplate, TemplateText> = {
  * number the template takes, so a session message never goes out with a
  * literal "{{2}}" in it.
  */
-export function renderTemplate(name: FollowUpTemplate, params: readonly string[]): string {
-  const t = TEMPLATE_TEXTS[name];
+export function renderTemplate(
+  name: FollowUpTemplate,
+  params: readonly string[],
+): string {
+  return fillText(name, TEMPLATE_TEXTS[name], params);
+}
+
+/**
+ * The reply to someone who messages a studio's WhatsApp number for the first
+ * time (spec 004, C.4). Session-only: it is only ever sent inside the 24-hour
+ * window the person just opened, so it is not submitted as a template. If the
+ * send fails, the retry job sends the `enquiry_ack` template instead, which
+ * takes the same params.
+ */
+export const INBOUND_ACK_TEXT: TemplateText = {
+  body:
+    "Hi {{1}}, thanks for messaging {{2}}. Our designer will reply to you here shortly. " +
+    "Reply STOP to opt out.",
+  params: ["first_name", "studio_name"],
+};
+
+export function renderInboundAck(params: readonly string[]): string {
+  return fillText("inbound_ack", INBOUND_ACK_TEXT, params);
+}
+
+function fillText(
+  name: string,
+  t: TemplateText,
+  params: readonly string[],
+): string {
   if (params.length !== t.params.length) {
-    throw new RangeError(`${name} takes ${t.params.length} params, got ${params.length}`);
+    throw new RangeError(
+      `${name} takes ${t.params.length} params, got ${params.length}`,
+    );
   }
-  return t.body.replace(/\{\{(\d+)\}\}/g, (_, i: string) => params[Number(i) - 1]);
+  return t.body.replace(
+    /\{\{(\d+)\}\}/g,
+    (_, i: string) => params[Number(i) - 1],
+  );
 }

@@ -64,7 +64,7 @@ export const followUp: JobHandler = async (job, ctx) => {
 
   const lead = must(
     await db.from("leads")
-      .select("name, phone_e164, consent_at, opted_out_at, last_inbound_at, first_human_reply_at, org:orgs!inner(name)")
+      .select("name, phone_e164, consent_at, opted_out_at, last_inbound_at, first_human_reply_at, last_human_reply_at, org:orgs!inner(name)")
       .eq("id", job.lead_id)
       .maybeSingle(),
     "find lead",
