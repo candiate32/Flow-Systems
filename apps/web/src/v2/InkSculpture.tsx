@@ -51,6 +51,7 @@ export function InkSculpture({ className = '' }: { className?: string }) {
     let dragging = false
     let lastX = 0
     let lastY = 0
+    let lastMove = 0
     let visible = true
     let frame = 0
     let size = { w: 0, h: 0, dpr: 1 }
@@ -143,6 +144,7 @@ export function InkSculpture({ className = '' }: { className?: string }) {
       const dy = e.clientY - lastY
       lastX = e.clientX
       lastY = e.clientY
+      lastMove = performance.now()
       vYaw = dx * 0.006
       vPitch = dy * 0.006
       yaw += vYaw
@@ -151,6 +153,11 @@ export function InkSculpture({ className = '' }: { className?: string }) {
     }
     function onPointerUp(e: PointerEvent) {
       dragging = false
+      // No coasting with reduced motion, or when the pointer had come to rest before release.
+      if (reduced || performance.now() - lastMove > 80) {
+        vYaw = 0
+        vPitch = 0
+      }
       if (canvas?.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId)
       schedule()
     }
