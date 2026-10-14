@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+/*
+ * The Flow Systems pages (/home) follow Apple's Human Interface Guidelines:
+ * the system font, Apple's light greys and one tint colour (Nila's verdigris).
+ * Sample forms keep their own --ff-* themes.
+ */
+@theme {
+  --font-hig: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --color-hig-ink: #1d1d1f;
+  --color-hig-ink-2: #636366;
+  --color-hig-fill: #f5f5f7;
+  --color-hig-track: #e8e8ed;
+  --color-hig-line: #d2d2d7;
+  --color-hig-tint: #1f5a50;
+  --color-hig-tint-bright: #2b7a6b;
+  --color-hig-tint-soft: #e3f1ec;
+  --color-hig-mint: #7fd3c1;
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 /* The showcase fades each form in as you switch to it (motion-safe only). */
 @keyframes ff-enter {
   from {
